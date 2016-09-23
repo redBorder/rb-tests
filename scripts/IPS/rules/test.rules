@@ -1,0 +1,1 @@
+alert tcp any any -> any any (msg:"TEST RULE"; sid:1000005) 

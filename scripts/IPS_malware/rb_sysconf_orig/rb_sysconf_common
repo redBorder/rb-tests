@@ -1,0 +1,746 @@
+#!/bin/bash
+
+RES_COL=60
+MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+
+f_save() {
+    cat >/opt/rb/etc/rb_sysconf.conf <<EOF
+net_flag_dna_support="${net_flag_dna_support}"
+net_flag_dna_default_mode="${net_flag_dna_default_mode}"
+net_flag_segment_autoassign_bypass="${net_flag_segment_autoassign_bypass}"
+net_list_ether="${net_vector_ether[@]}"
+net_list_bonding="${net_vector_bonding[@]}"
+net_list_segment="${net_vector_segment[@]}"
+net_list_dns="${net_vector_dns[@]}"
+net_bonding_mac="${net_bonding_mac}"
+net_bridge_keys="${net_bridge_keys}"
+net_bridge_values="${net_bridge_values}"
+net_vlanid=${net_vlanid}
+net_ip=${net_ip}
+net_netmask=${net_netmask}
+nnet_svc_vlanid=${net_svc_vlanid}
+net_svc_ip=${net_svc_ip}
+net_svc_netmask=${net_svc_netmask}
+net_gateway=${net_gateway}
+net_routes="${net_routes}"
+net_normal_ether_mac="${net_normal_ether_mac}"
+net_bypass_ether_mac="${net_bypass_ether_mac}"
+net_bypass_ether_slave_mac="${net_bypass_ether_slave_mac}"
+net_flag_route_changed=${net_flag_route_changed}
+net_flag_queues_changed=${net_flag_queues_changed}
+net_flag_changed=${net_flag_changed}
+net_flag_gw_invalid=${net_flag_gw_invalid}
+net_flag_force_apply=${net_flag_force_apply}
+net_bus_bpbr="${net_bus_bpbr}"
+dns_primary=${dns_primary}
+dns_secondary=${dns_secondary}
+dns_domain=${dns_domain}
+sys_hostname=${sys_hostname}
+sys_ip_rb_manager=${sys_ip_rb_manager}
+rb_is_manager=${rb_is_manager}
+rb_is_sensor=${rb_is_sensor}
+rb_is_sensor_gateway=${rb_is_sensor_gateway}
+net_queues=${net_queues}
+net_count_igb=${net_count_igb}
+sys_flag_ha_first_time=${sys_flag_ha_first_time}
+sys_ha_mode=${sys_ha_mode}
+sys_ha_pe=${sys_ha_pe}
+sys_ha_shared_secret=${sys_ha_shared_secret}
+sys_ha_remote_hostname=${sys_ha_remote_hostname}
+sys_ha_remote_ip=${sys_ha_remote_ip}
+sys_ha_virtual_ip=${sys_ha_virtual_ip}
+sys_ha_virtual_hostname=${sys_ha_virtual_hostname}
+sys_ha_version=${sys_ha_version}
+sys_ha_cname=${sys_ha_cname}
+sys_ha_bond=${sys_ha_bond}
+ftp_server=${ftp_server}
+ftp_username=${ftp_username}
+ftp_uri=${ftp_uri}
+sys_mta_mode=${sys_mta_mode}
+sys_mta_server=${sys_mta_server}
+sys_mta_server_port=${sys_mta_server_port}
+sys_mta_domain=${sys_mta_domain}
+sys_mta_username=${sys_mta_username}
+sys_mta_password=${sys_mta_password}
+sys_mta_enable_starttls_auto=${sys_mta_enable_starttls_auto}
+EOF
+}
+
+f_date() {
+    if  [ "x$sys_ip_rb_manager" == "x1" ]; then
+        echo "                                                  UTC time: `date '+%Y/%m/%d %H:%M'`"
+    else
+        echo "                                                      time: `date '+%Y/%m/%d %H:%M'`"
+    fi
+}
+
+f_set_color() {
+    green="echo -en \\033[32m"
+    lgreen="echo -en \\033[1;32m"
+    red="echo -en \\033[31m"
+    lred="echo -en \\033[1;31m"
+    yellow="echo -en \\033[1;33m"
+    orange="echo -en \\033[0;33m"
+    blue="echo -en \\033[34m"
+    cyan="echo -en \\033[0;36m"
+    lblue="echo -en \\033[1;34m"
+    black="echo -en \\033[1;30m"
+    norm="echo -en \\033[1;0m"
+    eval \$$1
+}
+
+f_ticker_start() {
+
+    local lock_ticker_file=$1
+        {
+        echo -n " "
+        while : ; do
+            for i in \\\\ \| / - ; do
+                echo -e -n "\b$i"
+                if [ -f /var/lock/${lock_ticker_file} ]; then
+                    echo -e -n "\b"
+                    sleep 1
+                    rm -f /var/lock/${lock_ticker_file}
+                    exit 0
+                fi
+                sleep 1
+            done
+        done
+
+        } &
+
+}
+
+f_is_local_tty() {
+
+    tty | egrep -q "/dev/tty[S0-9][0-9]*"
+    if [ $? -eq 0 ]; then
+        return 0
+    else
+        return 1
+    fi
+
+}
+
+f_ticker_stop() {
+    
+    local lock_ticker_file=$1
+    touch /var/lock/${lock_ticker_file}
+    sleep 2
+}
+
+p_ok_fail() {
+    if [ "x$?" == "x0" ]; then
+        e_ok
+    else
+        e_fail
+    fi
+}
+
+e_ok() {
+    $MOVE_TO_COL
+    echo -n "["
+    f_set_color green
+    echo -n $"  OK  "
+    f_set_color norm
+    echo -n "]"
+    echo -ne "\r"
+    echo
+    return 0
+}
+
+e_fail() {
+    $MOVE_TO_COL
+    echo -n "["
+    f_set_color red 
+    echo -n $"FAILED"
+    f_set_color norm
+    echo -n "]"
+    echo -ne "\r"
+    echo
+    return 1
+}
+
+echo_ok() {
+    
+    f_set_color green
+    echo "$1"
+    f_set_color norm
+    echo
+    sleep 2
+}
+
+echo_warn() {
+
+    f_set_color orange
+    echo "$1"
+    f_set_color norm
+    echo
+    sleep 3
+}
+
+echo_fail() {
+    
+    f_set_color red
+    echo "$1"
+    f_set_color norm
+    echo
+    sleep 3
+}
+
+echo_ask() {
+    
+    echo -n "  $1 "
+}
+
+f_time_ok() {
+
+    local ERROR=0
+    local DATE TIME HOUR MINUTE YEAR MONTH DAY
+    local OPT="$@"
+    if [ -n "$OPT" ]; then
+        HOUR=""
+        MINUTE=""
+        YEAR=""
+        MONTH=""
+        DAY=""
+
+        echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]]:[[:digit:]][[:digit:]]$'
+        if [ $? -eq 0 ]; then
+            HOUR=`echo "$OPT" | tr ':' ' '| awk '{print $1}'`
+            MINUTE=`echo "$OPT" | tr ':' ' '| awk '{print $2}'`
+        else
+            echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]][[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]$'
+            if [ $? -eq 0 ]; then
+                YEAR=`echo "$OPT" | tr '/' ' '| awk '{print $1}'`
+                MONTH=`echo "$OPT" | tr '/' ' '| awk '{print $2}'`
+                DAY=`echo "$OPT" | tr '/' ' '| awk '{print $3}'`
+            else
+                echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]][[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]/[[:digit:]][[:digit:]] [[:digit:]][[:digit:]]:[[:digit:]][[:digit:]]$'
+                if [ $? -eq 0 ]; then
+                    YEAR=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $1}'`
+                    MONTH=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $2}'`
+                    DAY=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $3}'`
+                    HOUR=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $4}'`
+                    MINUTE=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $5}'`
+                else
+                    echo_warn "Invalid format date!!"
+                    ERROR=1
+                fi
+            fi
+        fi
+
+        if [ "x$HOUR" != "x" -o "x$MINUTE" != "x" -o "x$YEAR" != "x" -o "x$MONTH" != "x" -o "x$DAY" != "x" ]; then
+            if [ "x$HOUR" != "x" -a "x$MINUTE" != "x" ]; then
+                if [ $HOUR -ge 24 -o $HOUR -lt 0 ]; then
+                    ERROR=1
+                    echo_fail "Invalid format date!! (the 'hour' field must be between 0 and 23)"
+                fi
+                if [ $MINUTE -ge 60 -o $MINUTE -lt 0 ]; then
+                    ERROR=1
+                    echo_fail "Invalid format date!! (the 'minute' field must be between 0 and 59)"
+                fi
+            fi
+            if [ "x$YEAR" != "x" -a "x$MONTH" != "x" -a "x$DAY" != "x" ]; then
+                if [ $DAY -gt 31 -o $DAY -lt 1 ]; then
+                    ERROR=1
+                    echo_fail "Invalid format date!! (the 'day' field must be between 1 and 31)"
+                fi
+                if [ $MONTH -gt 12 -o $MONTH -lt 1 ]; then
+                    ERROR=1
+                    echo_fail "Invalid format date!! (the 'month' field must be between 1 and 12)"
+                fi
+                if [ $YEAR -lt 1970 ]; then
+                    ERROR=1
+                    echo_fail "Invalid format date!! (the 'year' field must be greater than 1970)"
+                fi
+            fi
+        else
+            ERROR=1
+        fi
+    else
+        ERROR=1
+    fi
+
+    return $ERROR
+}
+
+f_time_set() {
+
+    local DATE TIME HOUR MINUTE YEAR MONTH DAY
+    local OPT="$@"
+    echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]]:[[:digit:]][[:digit:]]$'
+    if [ $? -eq 0 ]; then
+        HOUR=`echo "$OPT" | tr ':' ' '| awk '{print $1}'`
+        MINUTE=`echo "$OPT" | tr ':' ' '| awk '{print $2}'`
+        TIME="$HOUR:$MINUTE"
+        date -s "$TIME" &>/dev/null
+    else
+        echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]][[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]$'
+        if [ $? -eq 0 ]; then
+            YEAR=`echo "$OPT" | tr '/' ' '| awk '{print $1}'`
+            MONTH=`echo "$OPT" | tr '/' ' '| awk '{print $2}'`
+            DAY=`echo "$OPT" | tr '/' ' '| awk '{print $3}'`
+            DATE="$YEAR/$MONTH/$DAY"
+            TIME=`date '+%H:%M'`
+            date -s "$DATE $TIME" &>/dev/null
+        else
+            echo "$OPT" | egrep  -q '^[[:digit:]][[:digit:]][[:digit:]][[:digit:]]/[[:digit:]][[:digit:]]/[[:digit:]][[:digit:]] [[:digit:]][[:digit:]]:[[:digit:]][[:digit:]]$'
+            if [ $? -eq 0 ]; then
+                YEAR=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $1}'`
+                MONTH=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $2}'`
+                DAY=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $3}'`
+                HOUR=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $4}'`
+                MINUTE=`echo "$OPT" | tr '/' ' '| tr ':' ' ' | awk '{print $5}'`
+                TIME="$HOUR:$MINUTE"
+                DATE="$YEAR/$MONTH/$DAY"
+                date -s "$DATE $TIME" &>/dev/null
+            else
+                echo_warn "Invalid format date!!"
+            fi
+        fi
+    fi
+    hwclock --systohc
+
+}
+
+f_check_tty() {
+  TTY=$(tty 2>/dev/null)
+  if [ $? -ne 0 ]; then
+    # not a valid tty!
+    exit 1
+  fi 
+}
+
+f_wait_cluster() {
+    rm -f /opt/rb/etc/cluster.lock
+
+    /opt/rb/bin/rb_service start &>/dev/null
+    service chef-client start &>/dev/null
+
+    /opt/rb/bin/rb_wakeup_chef &>/dev/null
+    sleep 5
+    /opt/rb/bin/rb_wakeup_chef &>/dev/null
+    
+    echo -n "Finishing configuration. Please be patient ..."
+    counter=0
+    rm -f /opt/rb/etc/cluster-installed.txt.lock
+    while [ ! -f /opt/rb/etc/cluster-installed.txt -a $counter -lt 10000 ]; do
+        sleep 1
+        counter=$(($counter +1))
+    done
+
+    if [ -f /opt/rb/etc/cluster-installed.txt ]; then
+        e_ok
+        #rb_download_chef_data.sh -y
+        f_set_color green
+        echo -n "Server configured. Access to https://$(ip a s bond0|grep inet|grep bond0|awk '{print $2}'|sed 's|/.*$||')" 
+        f_set_color norm
+        e_ok
+    else
+        e_fail
+    fi                                          
+}
+             
+f_wizard() {
+    echo
+
+    eth_ifaces_count=$(ls -d /sys/class/net/eth* | wc -w)
+
+    if [ -f /opt/rb/etc/enterprise ]; then
+        if [ $eth_ifaces_count -lt 2 ]; then
+            server_mode="single"
+        else
+            server_mode="cluster"
+            #echo "  Select the Server Mode: "
+            #echo "     1.- Single Mode  - testing only"
+            #echo "     2.- Cluster Mode - production mode (default mode)"
+            #echo -n "  Choose an option: "
+            #read OPT
+            #if [ "x$OPT" == "x1" -o "x$OPT" == "xsingle" -o "x$OPT" == "xSingle" -o "x$OPT" == "xs" -o "x$OPT" == "xS" -o "x$OPT" == "xsi" -o "x$OPT" == "xsin" -o "x$OPT" == "xSin" ]; then
+            #    server_mode="single"
+            #else
+            #    server_mode="cluster"
+            #fi
+        fi
+    else
+        server_mode="single"
+    fi
+    echo "  Selected Mode: $server_mode"
+
+    if [ $eth_ifaces_count -lt 1 ]; then
+        echo
+        echo "ERROR: You need at least one ethernet interface to create the cluster"
+        echo -n "Press a key to continue ... "
+        read trashme
+    elif [ $eth_ifaces_count -gt 1 -a "x$server_mode" == "xsingle" ]; then
+        echo
+        echo "ERROR: Single mode can have only one ethernet interface"
+        echo -n "Press a key to continue ... "
+        read trashme
+    else      
+        echo -n "  Insert Hostname [$(hostname)]: "
+        read OPT
+        [ "x$OPT" == "x" ] && OPT="$(hostname)"
+        if [ -n "$OPT" ]; then
+            echo "$OPT" | egrep  -q "^[[:alnum:]]+[[:alnum:].]+[[:alnum:]]$"
+            if [ $? -eq 0 ]; then
+                sys_hostname=$OPT
+                f_net_domain_wizard
+
+                local ntp_server="pool.ntp.org"
+                echo -n "  NTP server [$ntp_server]: "
+                read OPT
+
+                [ "x$OPT" != "x" ] && ntp_server=$OPT
+
+                configure_net=1
+
+		ip a s bond0 2>/dev/null |grep inet|grep -q global
+		if [ -d /sys/class/net/bond0 -a $? -eq 0 ]; then
+                    echo -n "  bond0 is already configured. Would you like to overwrite it? (y/N) "
+                    read OPT
+                    if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+                        f_net_bonding_delete 0 &>/dev/null
+                        f_net_bonding_new 0 0 0
+                        ret=$?
+                    else
+                        configure_net=0
+                        echo "  bond0 ignored"
+                        ret=0
+                    fi
+                elif [ -d /sys/class/net/eth0 ]; then
+                    f_net_bonding_delete 0 &>/dev/null
+                    f_net_bonding_new 0 0 0
+                    ret=$?
+                else
+                    ret=1
+                fi
+                if [ $ret -eq 0 ]; then
+                    if [ "x$server_mode" == "xcluster" -a -d /sys/class/net/eth1 ]; then
+		        ip a s bond1 2>/dev/null |grep inet|grep -q global
+                        if [ -d /sys/class/net/bond1 -a $? -eq 0 ]; then
+                            echo -n "  bond1 is already configured. Would you like to overwrite it? (y/N) "
+                            read OPT
+                            if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+                                configure_net=1
+                                f_net_bonding_delete 1 &>/dev/null
+                                f_net_bonding_new 1 1 0
+                                ret=$?
+                            else
+                                echo "  bond1 ignored"
+                                ret=0
+                            fi
+                        else
+                            configure_net=1
+                            f_net_bonding_delete 1 &>/dev/null
+                            f_net_bonding_new 1 1 0
+                            ret=$?
+                        fi
+                    else
+                        ret=0
+                    fi
+                    if [ $ret -eq 0 ]; then
+                        local join_cluster=""
+                        if [ "x$server_mode" != "xsingle" ]; then
+                            echo -n "  Would you like to "
+                            f_set_color cyan
+                            echo -n "join"
+                            f_set_color norm
+                            echo -n " to other cluster? (y/N) "
+                            read OPT
+                            echo
+                            while [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; do
+                                echo -n "  Cluster SYNC IP Address "
+                                if [ -d /sys/class/net/bond0 -a -d /sys/class/net/bond1 ]; then                                
+                                    syncif="bond1"
+                                    echo -n "(bond1)"
+                                elif [ -d /sys/class/net/bond0 -a ! -d /sys/class/net/bond1 ]; then                                
+                                    syncif="bond0"
+                                    echo -n "(bond0)"
+                                fi
+                                join_cluster_candidate=$(/opt/rb/var/rb-discover/bin/rb_discover_client.rb -s 2>/dev/null)
+                                if [ "x$join_cluster_candidate" != "x" ]; then
+                                    echo -n " [ $join_cluster_candidate ] "
+                                fi
+
+                                echo -n ": "
+                                read join_cluster
+                                if [ "x$join_cluster" == "x" ]; then
+                                    if [ "x$join_cluster_candidate" != "x" ]; then
+                                        join_cluster="$join_cluster_candidate"
+                                        join_cluster_error=1
+                                    else
+                                        f_set_color red 
+                                        echo "  Invalid cluster address. This node will not join with any cluster!!"
+                                        f_set_color norm
+                                    fi
+                                else
+                                    join_cluster_error=1
+                                fi
+                                OPT="n"
+                            done
+                            [ "x$join_cluster" != "x" ] && f_select_manager_mode
+                        fi
+
+                        s3_type=""
+                        external_memcached=""
+                        external_postgresql=""
+
+			if [ "x$join_cluster" == "x" -a -f /opt/rb/etc/enterprise ]; then
+                            cdomaindefault=$(cat /etc/resolv.conf |grep "^domain"|awk '{print $2}') 
+                            [ "x$cdomaindefault" == "x" ] && cdomaindefault="redborder.cluster"
+                            echo -n "  Cluster domain name [$cdomaindefault] : "
+                            read cdomain
+                            [ "x$cdomain" == "x" ] && cdomain="$cdomaindefault"
+                            echo -n "  Would you like to use remote "
+	                    f_set_color cyan
+                            echo -n "S3"
+	                    f_set_color norm
+                            echo -n " storage? (y/N) "
+                            read s3_type
+                            [ "x$s3_type" == "xy" -o "x$s3_type" == "xY" ] && s3_type="aws"
+                            [ "x$s3_type" != "xaws" -a "x$s3_type" != "xAWS" -a "x$s3_type" != "xAws" -a "x$s3_type" != "xAWs" -a "x$s3_type" != "xAwS" ] && s3_type="local" || s3_type="aws"
+                            if [ "x$s3_type" == "xaws" ]; then
+                                echo -n "      AWS Access Key: "
+                                read access_key
+                                echo -n "      AWS Secret Key: "
+                                read secret_key 
+                                echo -n "      AWS Bucket    : "
+                                read bucket
+                                echo    "      AWS Region: "
+                                echo    "          1.- US Standard         (default) -  s3.amazonaws.com "
+                                echo    "          2.- US West - Oregon              -  s3-us-west-2.amazonaws.com "
+                                echo    "          3.- US West - Northern California -  s3-us-west-1.amazonaws.com "
+                                echo    "          4.- EU - Ireland                  -  s3-eu-west-1.amazonaws.com"
+                                echo    "          5.- Asia Pacific - Singapore      -  s3-ap-southeast-1.amazonaws.com"
+                                echo    "          6.- Asia Pacific - Sydney         -  s3-ap-southeast-2.amazonaws.com"
+                                echo    "          7.- Asia Pacific - Tokyo          -  s3-ap-northeast-1.amazonaws.com"
+                                echo    "          8.- South America - San Paulo     -  s3-sa-east-1.amazonaws.com"
+                                echo    "          9.- Other                         -  "
+                                echo -n "        Please specify your location [1-9]: "
+                                read s3host
+
+                                if [ "x$s3host" == "x1" -o "x$s3host" == "x" ]; then
+                                   s3host="s3.amazonaws.com" 
+                                elif [ "x$s3host" == "x2" ]; then 
+                                   s3host="s3-us-west-2.amazonaws.com"
+                                elif [ "x$s3host" == "x3" ]; then 
+                                   s3host="3-us-west-1.amazonaws.com"
+                                elif [ "x$s3host" == "x4" ]; then 
+                                   s3host="s3-eu-west-1.amazonaws.com"
+                                elif [ "x$s3host" == "x5" ]; then 
+                                   s3host="s3-ap-southeast-1.amazonaws.com"
+                                elif [ "x$s3host" == "x6" ]; then 
+                                   s3host="s3-ap-southeast-2.amazonaws.com"
+                                elif [ "x$s3host" == "x7" ]; then 
+                                   s3host="s3-ap-northeast-1.amazonaws.com"
+                                elif [ "x$s3host" == "x8" ]; then 
+                                   s3host="s3-sa-east-1.amazonaws.com"
+                                else
+                                   echo -n "      AWS Host: "
+                                   read s3host
+                                fi                                    
+                            fi
+                            echo -n "  Would you like to use remote "
+	                    f_set_color cyan
+                            echo -n "memcached"
+	                    f_set_color norm
+                            echo -n "? (y/N) "
+                            read OPT
+                            if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+                                echo -n "      Memcached Host: "
+                                read external_memcached
+                            fi
+
+                            echo -n "  Would you like to use remote "
+	                    f_set_color cyan
+                            echo -n "postgresql"
+	                    f_set_color norm
+                            echo -n " database? (y/N) "
+                            read OPT
+                            if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+                                echo -n "      Postgresql Host: "
+                                read external_postgresql_host
+                                echo -n "      Postgresql Username: "
+                                read external_postgresql_username
+                                external_postgresql_password=""
+                                external_postgresql_password_verified="1"
+                                while [ "x$external_postgresql_password" != "x$external_postgresql_password_verified" ]; do 
+                                    read -s -p "      Postgresql Password: " external_postgresql_password
+                                    echo
+                                    read -s -p "      Postgresql Password Confirmation: " external_postgresql_password_verified
+                                    echo
+                                    if [ "x$external_postgresql_password" != "x$external_postgresql_password_verified" ]; then
+                                        f_set_color red
+                                        echo "              Password doesn't match!!"
+                                        f_set_color norm
+                                    fi
+                                done
+                                echo -n "      Postgresql Database: "
+                                read external_postgresql_database
+                            fi
+                        fi
+
+                        echo 
+                        echo -n "  Are you sure you want to " 
+	                f_set_color red
+                        echo -n "apply this configuration "
+                        f_set_color norm
+                        echo -n "? (y/N) "
+                        read OPT
+                        if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+	                    f_set_color cyan
+                            echo 
+                            echo "##################################################################"
+                            echo "               Applying wizard configuration"
+                            echo "##################################################################"
+                            echo 
+	                    f_set_color norm
+
+                            ldconfig
+
+                            if [ $configure_net -eq 1 ]; then
+                                f_net_apply 0
+                                [ -f /opt/rb/bin/rb_clean_riak_data.sh ] && /opt/rb/bin/rb_clean_riak_data.sh -f
+                            fi
+
+                            if [ "x$join_cluster" == "x" ]; then
+                                [ -f /opt/rb/etc/enterprise ] && cat >/opt/rb/etc/externals.conf <<rBEOF
+REGION="$(echo ${s3host} | sed 's/\..*//')"
+S3TYPE="${s3_type}"
+S3HOST="${s3host}"
+S3BUCKET="${bucket}"
+AWS_ACCESS_KEY="${access_key}"
+AWS_SECRET_KEY="${secret_key}"
+ELASTICCACHEENDPOINT="${external_memcached}"
+SQLUSER="${external_postgresql_username}"
+SQLPASSWORD="${external_postgresql_password}"
+SQLDB="${external_postgresql_database}"
+SQLHOST="${external_postgresql_host}"
+rBEOF
+                                [ "x$cdomain" == "x" ] && cdomain="redborder.cluster"
+                                echo "$cdomain" | head -n 1 > /opt/rb/etc/cdomain
+
+                                /opt/rb/bin/rb_configure_master.sh -f
+                                f_sys_apply 0 0
+                            else
+                                OPT="y"
+                                while [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; do
+                                    echo -n "Checking connectivity with ${join_cluster}:"
+                                    ping -c 2 ${join_cluster} &>/dev/null
+                                    if [ $? -eq 0 ]; then
+                                        e_ok
+                                        echo -n "Checking ssh (22) port with ${join_cluster}:"
+                                        nc -z -w10 ${join_cluster} 22 &>/dev/null
+                                        if [ $? -eq 0 ]; then
+                                            e_ok
+                                            echo -n "Checking ssl (443) port with ${join_cluster}:"
+                                            nc -z -w10 ${join_cluster} 443 &>/dev/null
+                                            if [ $? -eq 0 ]; then
+                                                e_ok
+                                                join_cluster_error=0
+                                            fi
+                                        fi
+                                    fi
+    
+                                    if [ $join_cluster_error -eq 1 ]; then
+                                        e_fail
+                                        f_set_color red
+                                        echo    "The host ${join_cluster} looks not accesible."
+                                        f_set_color norm
+                                        echo -n "Would you like change the cluster sync address? (y/N) "
+                                        read OPT
+                                        if [ "x${OPT}" == "xy" -o "x${OPT}" == "xY" ]; then
+                                            join_cluster=""
+                                            while [ "x$join_cluster" == "x" ]; do 
+                                                echo -n "Cluster SYNC IP Address "
+                                                if [ -d /sys/class/net/bond0 -a -d /sys/class/net/bond1 ]; then                                
+                                                    syncif="bond1"
+                                                    echo -n "(bond1)"
+                                                elif [ -d /sys/class/net/bond0 -a ! -d /sys/class/net/bond1 ]; then                                
+                                                    syncif="bond0"
+                                                    echo -n "(bond0)"
+                                                fi
+                                                echo -n ": "
+                                                read join_cluster
+                                            done
+                                        fi
+                                    else
+                                        OPT="n"
+                                    fi
+                                done
+                                
+                                service chef-client stop
+                                for n in $(ls /opt/rb/etc/mode/ 2>/dev/null); do
+                                    echo -n "disabled" > /opt/rb/etc/mode/$n
+                                done
+                                f_sys_apply 0 0 0
+                            fi
+
+
+                            #if [ "x$join_cluster" == "x" -a -f /opt/rb/etc/enterprise ]; then
+                            #    if [ "x$external_postgresql_host" != "x" -a "x$external_postgresql_database" != "x" -a "x$external_postgresql_username" != "x" -a "x$external_postgresql_password" != "x" ]; then
+                            #        rb_initpg.sh -ier "${external_postgresql_host}" -u "${external_postgresql_username}" -p "${external_postgresql_password}" -d "${external_postgresql_database}" -f
+                            #        if [ $? -ne 0 ]; then
+                            #            echo "ERROR: Cannot sync databases. Please execute this commands when the server is ready: "
+                            #            echo "rb_initpg.sh -ier \"${external_postgresql_host}\" -u \"${external_postgresql_username}\" -p \"${external_postgresql_password}\" -d \"${external_postgresql_database}\""
+                            #        fi
+                            #    fi
+                            #fi
+
+                            if [ "x$ntp_server" != "x" ]; then
+                                echo -n "Synchronizing with the NTP server: "
+                                /etc/init.d/ntpd stop &>/dev/null
+                                ntpdate $ntp_server &>/dev/null
+                                ret=$?
+                                p_ok_fail $ret
+                                hwclock --systohc
+                               echo -n "Current UTC time: "
+                               date | tr '\n' ' '
+                               p_ok_fail $ret
+                            else
+                               echo -n "Current UTC time: "
+                               date | tr '\n' ' '
+                               p_ok_fail 0
+                            fi
+
+                            [ "x$join_cluster" == "x" ] && /opt/rb/bin/rb_service start
+
+                            if [ "x$server_mode" == "xsingle" ]; then
+                                f_wait_cluster
+                            else
+                                if [ "x$join_cluster" != "x" -a "x$MANAGER_SEL_MODE" != "x" -a -f /opt/rb/etc/enterprise ]; then
+                                    sys_ip_rb_manager=$join_cluster
+                                    #LANG=C /bin/date > /opt/rb/etc/cluster-installed.txt
+                                    #[ -f /opt/rb/bin/rb_cloud_finish.sh ] && /opt/rb/bin/rb_cloud_finish.sh
+                                    f_sys_rb_register $sys_ip_rb_manager $MANAGER_SEL_MODE
+                                else
+                                    f_wait_cluster
+                                fi
+                            fi
+                            service chef-client stop &>/dev/null
+                            [ -f /etc/chef/client.pem ] && service chef-client start
+                        else
+                            echo
+                            echo_fail "  Changes not applied!"
+                            if [ $configure_net -eq 1 ]; then
+                                [ ! -d /sys/class/net/bond0 ] && f_net_bonding_delete 0 &>/dev/null
+                                if [ "x$server_mode" != "xsingle" ]; then
+                                    [ ! -d /sys/class/net/bond1 ] && f_net_bonding_delete 1 &>/dev/null
+                                fi
+                            fi
+                        fi
+                    fi
+                fi
+            else
+                echo "ERROR: hostname not valid!!"
+            fi
+            echo
+            echo -n "Press a key to continue ... "
+            read trashme
+        fi
+    fi
+}
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

@@ -1,0 +1,1938 @@
+#!/bin/bash
+
+f_net_init() {
+
+    local ret=0
+    local port_index
+    net_bonding_max_devices=4
+    if [ "x${net_ip}" == "x" ]; then
+        # No IP configured ... first time
+        f_net_get_ip
+    fi
+
+    net_queues=${net_queues:="0"}
+    if [ ${net_queues} -eq 0 ]; then
+        net_queues=$(ls -d /sys/class/cpuid/* | wc -w)
+    fi
+
+    # Is a sesor IPMI capable?
+    rb_ipmi_capable=0
+    net_ipmi_ip=""
+    net_ipmi_netmask=""
+    net_ipmi_gateway=""
+    f_ipmi_capable
+
+    net_flag_dna_support=${net_flag_dna_support:="0"}
+    net_flag_route_changed=${net_flag_route_changed:="0"}
+    net_flag_queues_changed=${net_flag_queues_changed:="0"}
+    net_list_ether=${net_list_ether:=""}
+    net_list_bonding=${net_list_bonding:=""}
+    net_list_segment=${net_list_segment:=""}
+    net_list_dns=${net_list_dns:=""}
+    dns_primary=${dns_primary:=""}
+    dns_secondary=${dns_secondary:=""}
+    dns_domain=${dns_domain:="local.lan"}
+    net_flag_changed=${net_flag_changed:="0"}
+    net_flag_gw_invalid=${net_flag_gw_invalid:="0"}
+    net_flag_need_service_network_start=${net_flag_need_service_network_start:="0"}
+    net_flag_service_snortd_started=${net_flag_service_snortd_started:="0"}
+    net_flag_eth_check=${net_flag_eth_check:="0"}
+    net_flag_segment_autoassign_bypass=${net_flag_segment_autoassign_bypass:="1"}
+    net_flag_hw_segments_changed=${net_flag_hw_segments_changed:="0"}
+    net_flag_hw_bonding_changed=${net_flag_hw_bonding_changed:="0"}
+
+    f_net_init_bypass
+    if [ "x${net_list_ether}" == "x" ]; then
+        # first time
+        net_list_ether=$(f_net_gen_list_ether)
+    else
+        # need to check if there is a hardware replacement and/or dna_licenses
+        net_list_ether_check=$(f_net_gen_list_ether)
+        net_list_ether_check="$(f_net_check_dna_license ${net_list_ether_check})"
+        f_net_check_diff_ether ${net_list_ether} "XXX" ${net_list_ether_check}
+        ret=$?
+        if [ $ret -ne 0 ]; then
+            # changes detected
+            if [ $ret -eq 1 ]; then
+                # segmentes ports changes detected
+                # need to keep ports belongs to bondings
+                for port_index in $(f_net_port_get_list_busy_dev bond ${net_list_ether}); do
+                    port_busy_dev=$(f_net_port_get_value ${port_index} 'busy_dev' ${net_list_ether})
+                    net_list_ether_check="$(f_net_port_set_busy ${port_index} ${port_busy_dev} ${net_list_ether_check})"
+                done
+                net_list_ether="${net_list_ether_check}"
+                # need to reset segments information and activate correct flag
+                net_list_segment=""
+                net_flag_segment_autoassign_bypass=1
+                net_flag_hw_segments_changed=1
+            elif [ $ret -eq 2 ]; then
+                # bonding ports changes detected
+                net_list_ether=${net_list_ether_check}
+                # need to reset bonding and segments information and activate correct flag
+                net_list_bonding=""
+                net_list_segment=""
+                net_flag_segment_autoassign_bypass=1
+                net_flag_hw_segments_changed=1
+                net_flag_hw_bonding_changed=1
+            else
+                # mode not implemented
+                :
+            fi
+        fi
+    fi
+    # check dna_license
+    net_list_ether="$(f_net_check_dna_license ${net_list_ether})"
+    net_vector_ether=( ${net_list_ether} )
+    net_vector_bonding=( ${net_list_bonding} )
+    net_vector_segment=( ${net_list_segment} )
+    net_vector_dns=( ${net_list_dns} )
+
+}
+
+f_conf_network() {
+    
+    local msg_dna_support=""
+
+    # init vars
+    f_net_segment_autoassign
+
+    while [ 1 ]; do
+        f_check_tty
+        [ -z "$DEBUG" ] && clear
+
+        if [ ${#net_vector_bonding[@]} -ne 0 ]; then
+            net_flag_hw_bonding_changed=0
+        fi
+        if [ ${#net_vector_segment[@]} -ne 0 ]; then
+            net_flag_hw_segments_changed=0
+        fi
+        if [ ${net_flag_dna_support} -eq 0 ]; then
+            msg_dna_support="disabled"
+        else
+            #msg_dna_support="enabled"
+            msg_dna_support="disabled"
+        fi
+
+        cat <<EOF
+
+                        redBorder Network configuration menu
+
+
+  1) Management Network configuration
+  2) DNS and domain settings
+EOF
+
+# Sensor | IPMI
+# -------------
+#   1    |   1  Sensor + IPMI
+#   1    |   0  Sensor only
+#   0    |   1  Manager + IPMI
+#   0    |   0  Manager only
+
+        if [ "x${rb_is_sensor}" == "x1" -a "x${rb_ipmi_capable}" == "x1" ]; then
+            # Sensor + IPMI
+            cat <<EOF
+  3) Segment settings
+  4) IPMI Network configuration wizard
+EOF
+        elif [ "x${rb_is_sensor}" == "x1" ]; then
+            # Sensor only
+            cat <<EOF
+  3) Segment settings
+EOF
+        elif [ "x${rb_ipmi_capable}" == "x1" ]; then
+            # Manager + IPMI
+            cat <<EOF
+  3) IPMI Network configuration wizard
+EOF
+        else
+            # Manager only ... nothing to do (NOP)
+            :
+        fi
+        echo
+        if [ "x${rb_ipmi_capable}" == "x1" ]; then
+            cat <<EOF
+                                  s) show IPMI config
+EOF
+        fi
+        cat <<EOF
+                                  i) info
+                                  a) apply
+                                  q) quit
+
+EOF
+
+        f_net_notification
+
+        cat <<EOF
+  ----------------------------------------------------------------------------
+EOF
+        f_date
+        echo -n "       Selection: "
+
+        #read OPT
+        case $OPT in
+
+            q | Q)  echo;echo "Exiting Network configuration";echo
+                    break;;
+            1)      f_conf_mgmt
+                    ;;
+            2)      echo
+                    f_net_domain_wizard
+                    ;;
+            3)      if [ "x${rb_is_sensor}" == "x1" ]; then
+                        # Sensor (+/- IPMI)
+                        f_conf_segment
+                    elif [ "x${rb_ipmi_capable}" == "x1" ]; then
+                        # Manager + IPMI
+                        f_net_ipmi_wizard
+                    else
+                        # Manager only ... nothing to do (NOP)
+                        :
+                    fi
+                    ;;
+            4)      if [ "x${rb_is_sensor}" == "x1" -a "x${rb_ipmi_capable}" == "x1" ]; then
+                        # Sensor + IPMI
+                        f_net_ipmi_wizard
+                    else
+                        # Manager only ... nothing to do (NOP)
+                        :
+                    fi
+                    ;;
+            a | A)  f_net_apply
+                    f_save
+                    ;;
+            i | I)  f_conf_net_info
+                    ;;
+            s | S)  if [ "x${rb_ipmi_capable}" == "x1" ]; then
+                        f_net_ipmi_info
+                    fi
+                    ;;
+
+        esac
+        #Jenkins
+        f_net_bonding_new
+        f_net_domain_wizard
+        f_conf_segment
+    done
+}
+
+f_conf_net_info() {
+    
+    while [ 1 ]; do
+       f_check_tty
+       [ -z "$DEBUG" ] && clear
+
+        cat <<EOF
+
+                        redBorder Port Network configuration menu
+
+
+EOF
+
+        #f_net_port_print ${net_vector_ether[@]}
+        f_net_info
+
+        cat <<EOF
+
+                                  p) port identification
+                                  q) quit
+
+EOF
+
+        f_net_notification
+
+        cat <<EOF
+  ----------------------------------------------------------------------------
+EOF
+        f_date
+        echo -n "       Selection: "
+
+        read OPT
+        case $OPT in
+
+            q | Q)  echo;echo "Exiting Port Network configuration";echo
+                break;;
+            p)  f_net_port_identify
+                ;;
+        esac
+    done
+}
+
+
+f_conf_mgmt() {
+    
+    while [ 1 ]; do
+	f_check_tty
+        [ -z "$DEBUG" ] && clear
+
+        if [ ${#net_vector_bonding[@]} -ne 0 ]; then
+            net_flag_hw_bonding_changed=0
+        fi
+
+        cat <<EOF
+
+                        redBorder Management Network configuration menu
+
+
+EOF
+
+        f_net_mgmt_info
+
+        cat <<EOF
+
+                                  n) new bonding
+                                  d) delete bonding
+                                  q) quit
+
+EOF
+
+        f_net_notification
+
+        cat <<EOF
+  ----------------------------------------------------------------------------
+EOF
+        f_date
+        echo -n "       Selection: "
+
+        read OPT
+        case $OPT in
+
+            q | Q)  echo;echo "Exiting Management Network configuration";echo
+                    break;;
+            n)      f_net_bonding_new
+                    ;;
+            d)      f_net_bonding_delete
+                    ;;
+        esac
+    done
+}
+
+f_conf_segment() {
+    
+    if [ "x${rb_is_manager}" == "x1" ]; then
+        echo_fail "This option is available only in a sensor appliance!"
+        return 1
+    fi
+    f_net_segment_autoassign
+
+    while [ 1 ]; do
+	f_check_tty
+        [ -z "$DEBUG" ] && clear
+
+        if [ ${#net_vector_segment[@]} -ne 0 ]; then
+            net_flag_hw_segments_changed=0
+        fi
+
+
+        cat <<EOF
+
+                        redBorder Segments configuration menu
+
+
+EOF
+
+        f_net_segment_info
+
+        cat <<EOF
+
+                                  f) force bypass auto assign
+                                  n) new segment
+                                  d) delete segment
+                                  q) quit
+
+EOF
+
+        f_net_notification
+
+        cat <<EOF
+  ----------------------------------------------------------------------------
+EOF
+        f_date
+        echo -n "       Selection: "
+
+        #read OPT
+        case $OPT in
+
+            q | Q)  echo;echo "Exiting Segment configuration";echo
+                break;;
+            f)  f_net_segment_autoassign_force
+                ;;
+            n)  f_net_segment_new
+                ;;
+            d)  f_net_segment_delete
+                ;;
+        esac
+        #Jenkins
+        f_net_segment_new
+    done
+}
+
+f_conf_dna_support() {
+
+    local toggle=0
+
+    echo
+    if [ ${net_flag_dna_support} -eq 0 ]; then
+        echo -n "Enable DNA support (y/N)?: "
+    else
+        echo -n "Disable DNA support (y/N)?: "
+    fi
+
+    read OPT
+    if [ -n "$OPT" ]; then
+        if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+            toggle=1
+        else
+            toggle=0
+        fi
+    else
+        toggle=0
+    fi
+   
+    if [ $toggle -eq 1 ]; then
+        # switch value for dna support flag
+        if [ ${net_flag_dna_support} -eq 0 ]; then
+            net_flag_dna_support=1
+        else
+            net_flag_dna_support=0
+        fi
+    fi
+}
+
+f_net_domain_wizard() {
+
+    local domain dns1 dns2
+    local -A net_dns
+    local flag=0
+    if [ ${#net_vector_dns[@]} -ne 0 ]; then
+        local d
+        for d in ${net_vector_dns[@]}; do
+            key=$(echo ${d} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${d} | sed 's/.*=\([^=]\)/\1/')
+            net_dns[$key]=$value
+        done
+    fi
+    
+    net_dns['domain']=$(cat /etc/resolv.conf |grep "^domain"|head -n 1 |awk '{print $2}')
+    [ "x${net_dns['domain']}" == "x" ] && net_dns['domain']="redborder.cluster"
+
+    if [ "x${net_dns['domain']}" == "x" ]; then
+        echo -n "  Insert Domain: "
+    else
+        echo -n "  Insert Domain: [${net_dns['domain']}] "
+    fi
+    #read OPT
+    OPT="redborder.lan"
+    if [ -n "$OPT" ]; then
+        f_domainok $OPT
+        if [ $? -eq 0 ]; then
+            #domain="$OPT"
+            flag=1
+            net_dns['domain']="$OPT"
+        else
+            echo_fail "Domain name $OPT is not valid!"
+            return 1
+        fi
+    else
+        if [ "x${net_dns['domain']}" == "x" ]; then
+            echo_fail "Need to provide a Domain name!"
+            return 1
+        else
+            # same value
+            :
+        fi
+    fi
+    net_dns['dns1']=$(cat /etc/resolv.conf |grep "^nameserver"|head -n 1 |awk '{print $2}')
+    if [ "x${net_dns['dns1']}" == "x" ]; then
+        echo -n "  Insert DNS Primary: "
+    else
+        echo -n "  Insert DNS Primary: [${net_dns['dns1']}] "
+    fi
+    #read OPT
+    OPT="10.0.70.5"
+    if [ -n "$OPT" ]; then
+       f_ipok $OPT
+       if [ $? -eq 0 ]; then
+            #dns1=$OPT
+            flag=1
+            net_dns['dns1']="$OPT"
+            net_dns['dns2']=$(cat /etc/resolv.conf |grep "^nameserver"|tail -n 1 |awk '{print $2}')
+            [ "x${net_dns['dns1']}" == "x${net_dns['dns2']}" ] && net_dns['dns2']=""
+            if [ "x${net_dns['dns2']}" == "x" ]; then
+                echo -n "  Insert DNS Secondary (optional): "
+            else
+                echo -n "  Insert DNS Secondary: [${net_dns['dns2']}] "
+            fi
+            #read OPT
+            OPT=""
+            if [ -n "$OPT" ]; then
+                f_ipok $OPT
+                if [ $? -eq 0 ]; then
+                    #dns2=$OPT
+                    flag=1
+                    if [ "x$OPT" != "x${net_dns['dns1']}" ];then
+                        net_dns['dns2']=$OPT
+                    else
+                        net_dns['dns2']=""
+                    fi
+                else
+                    echo_fail "IP address $OPT is not valid!"
+                    return 1
+                fi
+            else
+                #dns2=""
+                net_dns['dns2']=""
+            fi
+       else
+            echo_fail "IP address $OPT is not valid!"
+            return 1
+       fi
+    else
+        if [ "x${net_dns['dns1']}" == "x" ]; then
+            echo_fail "Need to insert a valid IP address!"
+            return 1
+        else
+            # same value
+            # go to dns2
+            net_dns['dns2']=$(cat /etc/resolv.conf |grep "^nameserver"|tail -n 1 |awk '{print $2}')
+            [ "x${net_dns['dns1']}" == "x${net_dns['dns2']}" ] && net_dns['dns2']=""
+            if [ "x${net_dns['dns2']}" == "x" ]; then
+                echo -n "  Insert DNS Secondary: "
+            else
+                echo -n "  Insert DNS Secondary: [${net_dns['dns2']}] "
+            fi
+            #read OPT
+            OPT=""
+            if [ -n "$OPT" ]; then
+                f_ipok $OPT
+                if [ $? -eq 0 ]; then
+                    #dns2=$OPT
+                    flag=1
+                    if [ "x$OPT" != "x${net_dns['dns1']}" ];then
+                        net_dns['dns2']=$OPT
+                    else
+                        net_dns['dns2']=""
+                    fi
+                else
+                    echo_fail "IP address $OPT is not valid!"
+                    return 1
+                fi
+            else
+                #dns2=""
+                net_dns['dns2']=""
+            fi
+
+        fi
+    fi
+
+    if [ $flag -eq 0 ]; then
+        # no changes
+        return 1
+    fi
+    
+    if [ "x${net_dns['dns2']}" == "x" ]; then
+        net_vector_dns=( "domain=${net_dns['domain']}" "dns1=${net_dns['dns1']}" )
+    else
+        net_vector_dns=( "domain=${net_dns['domain']}" "dns1=${net_dns['dns1']}" "dns2=${net_dns['dns2']}" )
+    fi
+
+    if [ ${#net_vector_dns[@]} -ne 0 ]; then
+        echo "# Created by rb_sysconf at $(date --utc)" > /etc/resolv.conf
+        echo "domain ${net_dns['domain']}" >> /etc/resolv.conf
+        for d in dns1 dns2; do
+            if [ "x${net_dns[$d]}" != "x" ]; then
+                echo "nameserver ${net_dns[$d]}" >> /etc/resolv.conf
+            fi
+        done
+        echo_ok "  DNS and domain settings applied successfully"
+        #f_partial_save 'net_list_dns' ${net_vector_dns[@]}
+    fi
+
+}
+
+f_net_port_identify() {
+
+    local mac
+    echo
+    f_net_port_print ${net_vector_ether[@]}
+    echo
+    echo -n "  Insert port number: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            mac=$(f_net_port_get_value ${OPT} 'mac' ${net_vector_ether[@]})
+            if [ "x${mac}" == "xnull" -o "x${mac}" == "x" ]; then
+                echo_fail "The port $OPT does not exist!"
+                return 1
+            else
+                f_net_blinking_set $OPT
+            fi
+        else
+            echo_fail "Incorrect port value $OPT, exiting!"
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+f_net_segment_info() {
+
+    local b bp n key value m_segment c_segment flag_first
+    local -A net_segment
+    echo "  # segment  ports  bypass_support"
+    echo "  =========  =====  =============="
+    for b in ${net_vector_segment[@]}; do
+
+        for bp in $(echo ${b} | sed 's/;/ /g'); do
+            key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+            net_segment[$key]=$value
+        done
+
+        m_segment="  ${net_segment['index']}"
+        c_segment=$(echo "${m_segment}" | wc -c)
+        for n in $(seq ${c_segment} 12); do
+            m_segment="${m_segment} "
+        done
+
+        m_segment="${m_segment} ${net_segment['port1']}"
+        if [ "x${net_segment['port2']}" != "xnull" ]; then
+            m_segment="${m_segment},${net_segment['port2']}"
+        fi
+        c_segment=$(echo "${m_segment}" | wc -c)
+        for n in $(seq ${c_segment} 19); do
+            m_segment="${m_segment} "
+        done
+
+        #if [ ${net_segment['dna']} -eq 1 ]; then
+        #    m_segment="${m_segment} yes"
+        #else
+        #    m_segment="${m_segment} no"
+        #fi
+        #c_segment=$(echo "${m_segment}" | wc -c)
+        #for n in $(seq ${c_segment} 32); do
+        #    m_segment="${m_segment} "
+        #done
+
+        if [ ${net_segment['bypass']} -eq 1 ]; then
+            m_segment="${m_segment} yes"
+        else
+            m_segment="${m_segment} no"
+        fi
+        c_segment=$(echo "${m_segment}" | wc -c)
+        for n in $(seq ${c_segment} 38); do
+            m_segment="${m_segment} "
+        done
+        echo "${m_segment}"
+    done
+}
+
+f_net_segment_autoassign_force() {
+
+    echo -n "  This operation recreates all segment configuration and force bypass activation. Are you sure? (y/N) "
+    read trashme 
+
+    if [ "x$trashme" == "xy" -o "x$trashme" == "xY" ]; then
+        local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+        local net_vector_segment_tmp b bp key value i
+        local net_flag_segment_found=0
+        local -A net_segment
+        
+        echo
+        # Go through segments for deleting
+        for b in ${net_vector_segment[@]}; do
+            for bp in $(echo ${b} | sed 's/;/ /g'); do
+                key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+                value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+                net_segment[$key]=$value
+            done
+            if [ ${net_segment['bypass']} -eq 1 ]; then
+                # we need to free the assigned ports for this segment
+                for i in 1 2; do
+                    if [ "x${net_segment["port$i"]}" != "xnull" ]; then
+                        net_vector_ether_tmp=( $(f_net_port_set_idle ${net_segment["port$i"]} ${net_vector_ether_tmp[@]}) )
+                    fi
+                done
+                # skip this segment = delete it
+                net_flag_segment_found=1
+                f_set_color orange
+                echo "  Segment ${net_segment['index']} deleted successfully"
+                f_set_color norm
+                continue
+            else
+                # dont delete if it is not bypass
+                net_vector_segment_tmp="${net_vector_segment_tmp} ${b}"
+            fi
+        done
+        if [ ${net_flag_segment_found} -eq 1 ]; then
+            net_vector_segment=( ${net_vector_segment_tmp} )
+            net_vector_ether=( ${net_vector_ether_tmp[@]} )
+            net_flag_changed=1
+        fi
+        net_flag_segment_autoassign_bypass=1
+        f_net_segment_autoassign
+    fi
+}
+
+f_net_segment_autoassign() {
+
+    if [ ${net_flag_segment_autoassign_bypass} -eq 1 ]; then
+        f_net_segment_autoassign_bypass
+        net_flag_segment_autoassign_bypass=0
+    fi
+}
+
+f_net_segment_autoassign_bypass() {
+
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+    local max_devices=$((($(f_net_device_list | wc -w)/2)-1))
+    local net_ports_bypass_master_list index_master index_slave mac_slave i
+    local i_segment=0
+    local -A net_segment
+
+    net_ports_bypass_master_list=$(f_net_port_get_bypass_master ${net_vector_ether_tmp[@]})
+    if [ "x${net_ports_bypass_master_list}" != "x" ]; then
+        echo
+        f_set_color orange
+        echo "  Assigning bypass segments automatically, please wait ..."
+        f_set_color norm
+        echo
+        for index_master in ${net_ports_bypass_master_list}; do
+            mac_slave=$(f_net_port_get_value ${index_master} 'bypass_slave_mac' ${net_vector_ether_tmp[@]})
+            index_slave=$(f_net_port_get_value_bymac ${mac_slave} 'index' ${net_vector_ether_tmp[@]})
+            net_segment['bypass']=1
+            net_segment['dna']=$(f_net_port_get_value ${index_master} 'dna_support' ${net_vector_ether_tmp[@]})
+            net_segment['index']=${i_segment}
+            net_segment['port1']=${index_slave}
+            net_segment['port2']=${index_master}
+            if [ $(f_net_port_get_value ${index_master} 'busy' ${net_vector_ether_tmp[@]}) -eq 0 -a $(f_net_port_get_value ${index_slave} 'busy' ${net_vector_ether_tmp[@]}) -eq 0 ]; then
+                for i in 1 2; do
+                    net_vector_ether_tmp=( $(f_net_port_set_busy ${net_segment["port$i"]} segment${i_segment} ${net_vector_ether_tmp[@]}) )
+                    #if [ ${net_segment['dna']} -eq 1 ]; then
+                    #    if [ ${net_flag_dna_support} -eq 1 ]; then
+                    #        net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment["port$i"]} 'dna_mode' '1' ${net_vector_ether_tmp[@]}) )
+                    #    else
+                    #        net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment["port$i"]} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+                    #    fi
+                    #fi
+                done
+                local net_segment_pre=""
+                for b in index port1 port2 dna bypass; do
+                    net_segment_pre="${net_segment_pre};${b}=${net_segment[${b}]}"
+                done
+                net_segment_pre=$(echo ${net_segment_pre} | sed 's/^;//')
+                net_vector_segment=( ${net_vector_segment[@]} "${net_segment_pre}" )
+                net_vector_ether=( ${net_vector_ether_tmp[@]} )
+                net_flag_changed=1
+                f_set_color green
+                echo "  Segment ${i_segment} created successfully"
+                f_set_color norm
+                i_segment=$((${i_segment}+1))
+            else
+                continue
+            fi
+        done
+        sleep 1
+    fi
+}
+
+f_net_segment_new() {
+
+    local -A net_segment
+    #local max_devices=$((($(f_net_device_list | wc -w)/2)-1)) # Segments goes from 0 to (#interfaces/2)-1
+    local max_devices=$(($(f_net_device_list | wc -w)-1)) # Segments goes from 0 to (#interfaces/2)-1
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+    local net_segment_port_default net_segment_index_default i flag_only_one_port
+
+    # First, index for segment
+    net_segment_index_default=$(f_net_segment_get_free_index ${max_devices})
+    if [ "x${net_segment_index_default}" == "xnull" -o "x${net_segment_index_default}" == "x" ]; then
+        echo_fail "Reached max segment to define!"
+        return 1
+    fi
+    echo
+    echo -n "  Insert segment number (0-${max_devices}) [${net_segment_index_default}]: "
+    #read OPT
+    OPT=0
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            if [ $OPT -ge 0 -a $OPT -le ${max_devices} ]; then
+                f_net_segment_index_is_free $OPT
+                if [ $? -eq 0 ]; then
+                    net_segment['index']="$OPT"
+                else
+                    echo_fail "The index $OPT is not free!"
+                    return 1
+                fi
+            else
+                echo_fail "Please, insert a number between 0 and ${max_devices}"
+                return 1
+            fi
+        else
+            echo_fail "Please, insert a number between 0 and ${max_devices}"
+            return 1
+        fi
+    else
+        
+        net_segment['index']="${net_segment_index_default}"
+    fi
+
+    # Now the two ports for segment (mandatories)
+    flag_only_one_port=1
+    for i in 1 2; do
+        if [ $i -eq 2 ]; then
+            net_port1_bypass=$(f_net_port_get_value ${net_segment['port1']} 'bypass_support' ${net_vector_ether_tmp[@]})
+            if [ ${net_port1_bypass} -eq 0 ]; then
+                # bypass port must be dual, but not bypass port may be single segments
+                echo -n "  Assign a second port to the segment (Y/n)?: "
+                #read OPT
+                OPT="N"
+                if [ "x$OPT" == "xn" -o "x$OPT" == "xN" ]; then
+                    flag_only_one_port=1
+                    net_segment['port2']="null"
+                    break
+                fi
+            fi
+        fi
+        echo
+        f_net_port_print_free ${net_vector_ether_tmp[@]}
+        echo
+        net_segment_port_default=$(f_net_port_get_free ${net_vector_ether_tmp[@]})
+        if [ "x${net_segment_port_default}" == "xnull" ]; then
+            echo_fail "There is no free port to assign to segment"
+            return 1
+        fi
+        if [ $i -eq 1 ]; then
+            echo -n "  Insert segment first port [${net_segment_port_default}]: "
+        else
+            echo -n "  Insert segment second port [${net_segment_port_default}]: "
+        fi
+        #read OPT
+        OPT=0
+        if [ -n "$OPT" ]; then
+            echo $OPT | egrep -q "^[[:digit:]]+$"
+            if [ $? -eq 0 ]; then
+                f_net_port_is_free $OPT ${net_vector_ether_tmp[@]}
+                if [ $? -eq 0 ]; then
+                    net_segment["port$i"]="$OPT"
+                    net_vector_ether_tmp=( $(f_net_port_set_busy ${net_segment["port$i"]} segment${net_segment['index']} ${net_vector_ether_tmp[@]}) )
+                else
+                    echo_fail "Please, insert a free port index"
+                    return 1
+                fi
+            else
+                echo_fail "Please, insert a free port index"
+                return 1
+            fi
+        else
+            net_segment["port$i"]=${net_segment_port_default}
+            net_vector_ether_tmp=( $(f_net_port_set_busy ${net_segment["port$i"]} segment${net_segment['index']} ${net_vector_ether_tmp[@]}) )
+        fi
+    done
+
+    # Now, check coherence in types (dna, bypass, etc)
+    local net_port1_dna net_port2_dna net_port1_bypass net_port2_bypass net_port1_dna_mode net_port2_dna_mode
+    # Checking DNA
+    net_port1_dna=$(f_net_port_get_value ${net_segment['port1']} 'dna_support' ${net_vector_ether_tmp[@]})
+    if [ ${flag_only_one_port} -eq 0 ]; then
+        net_port2_dna=$(f_net_port_get_value ${net_segment['port2']} 'dna_support' ${net_vector_ether_tmp[@]})
+        if [ "x${net_port1_dna}" != "x${net_port2_dna}" ]; then
+            echo_fail "Ports must have the same DNA support values!"
+            return 1
+        fi
+    fi
+    # Checking DNA license (dna_mode)
+    net_port1_dna_mode=$(f_net_port_get_value ${net_segment['port1']} 'dna_mode' ${net_vector_ether_tmp[@]})
+    if [ ${flag_only_one_port} -eq 0 ]; then
+        net_port2_dna_mode=$(f_net_port_get_value ${net_segment['port2']} 'dna_mode' ${net_vector_ether_tmp[@]})
+        if [ "x${net_port1_dna_mode}" != "x${net_port2_dna_mode}" ]; then
+            echo_fail "Ports must have the same DNA license support!"
+            return 1
+        fi
+    fi
+    if [ ${net_port1_dna} -eq 1 ]; then
+        # Segment type DNA
+        net_segment['dna']=1
+        #if [ ${net_flag_dna_support} -eq 1 ]; then
+        #    net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment['port1']} 'dna_mode' '1' ${net_vector_ether_tmp[@]}) )
+        #    if [ ${flag_only_one_port} -eq 0 ]; then
+        #        net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment['port2']} 'dna_mode' '1' ${net_vector_ether_tmp[@]}) )
+        #    fi
+        #else
+        #    net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment['port1']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+        #    if [ ${flag_only_one_port} -eq 0 ]; then
+        #        net_vector_ether_tmp=( $(f_net_port_set_value ${net_segment['port2']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+        #    fi
+        #fi
+    else
+        net_segment['dna']=0
+    fi
+    if [ ${net_port1_dna_mode} -eq 1 ]; then
+        # Segment type DNA
+        net_segment['dna_mode']=1
+    else
+        net_segment['dna_mode']=0
+    fi
+    
+    # Checking Bypass
+    net_port1_bypass=$(f_net_port_get_value ${net_segment['port1']} 'bypass_support' ${net_vector_ether_tmp[@]})
+    if [ ${flag_only_one_port} -eq 0 ]; then
+        net_port2_bypass=$(f_net_port_get_value ${net_segment['port2']} 'bypass_support' ${net_vector_ether_tmp[@]})
+        if [ "x${net_port1_bypass}" != "x${net_port2_bypass}" ]; then
+            echo_fail "Ports must have the same bypass support values!"
+            return 1
+        fi
+    else
+        if [ ${net_port1_bypass} -eq 1 ]; then
+            echo_fail "Bypass segments must have 2 ports!"
+            return 1
+        fi
+    fi
+    # Checking master and slave in case of bypass devices
+    # If it is a bypass segment then it is a dual port segment
+    if [ ${net_port1_bypass} -eq 1 ]; then
+        net_port1_bypass=$(f_net_port_get_value ${net_segment['port1']} 'bypass_master' ${net_vector_ether_tmp[@]})
+        if [ ${net_port1_bypass} -eq 0 ]; then
+            # Port 1 is the slave
+            net_port2_bypass=$(f_net_port_get_value ${net_segment['port2']} 'bypass_slave_mac' ${net_vector_ether_tmp[@]})
+            net_port1_bypass=$(f_net_port_get_value ${net_segment['port1']} 'mac' ${net_vector_ether_tmp[@]})
+            if [ "x${net_port1_bypass}" != "x${net_port2_bypass}" ]; then
+                echo_fail "Port ${net_segment['port1']} is not the slave of port ${net_segment['port2']}!"
+                return 1
+            fi
+        else
+            # Port 1 is the master
+            net_port1_bypass=$(f_net_port_get_value ${net_segment['port1']} 'bypass_slave_mac' ${net_vector_ether_tmp[@]})
+            net_port2_bypass=$(f_net_port_get_value ${net_segment['port2']} 'mac' ${net_vector_ether_tmp[@]})
+            if [ "x${net_port1_bypass}" != "x${net_port2_bypass}" ]; then
+                echo_fail "Port ${net_segment['port2']} is not the slave of port ${net_segment['port1']}!"
+                return 1
+            fi
+        fi
+        net_segment['bypass']=1
+    else
+        net_segment['bypass']=0
+    fi
+
+    local net_segment_pre=""
+    for b in index port1 port2 dna bypass dna_mode; do
+        net_segment_pre="${net_segment_pre};${b}=${net_segment[${b}]}"
+    done
+    net_segment_pre=$(echo ${net_segment_pre} | sed 's/^;//')
+    net_vector_segment=( ${net_vector_segment[@]} "${net_segment_pre}" )
+    net_vector_ether=( ${net_vector_ether_tmp[@]} )
+    net_flag_changed=1
+    echo_ok "Segment ${net_segment['index']} created successfully"
+}
+
+f_net_segment_delete() {
+
+    local -A net_segment
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+    local b bp key value net_vector_segment_tmp i
+    local net_flag_segment_found=0
+    if [ ${#net_vector_segment[@]} -eq 0 ]; then
+        echo_fail "There is no segment for deleting"
+        return 1
+    fi
+    echo
+    echo -n "  Insert segment number: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            for b in ${net_vector_segment[@]}; do
+                for bp in $(echo ${b} | sed 's/;/ /g'); do
+                    key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+                    value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+                    net_segment[$key]=$value
+                done
+                if [ ${net_segment['index']} -eq $OPT ]; then
+                    net_flag_segment_found=1
+                    # we need to free the assigned ports for this segment
+                    for i in 1 2; do
+                        if [ "x${net_segment["port$i"]}" != "xnull" ]; then
+                            net_vector_ether_tmp=( $(f_net_port_set_idle ${net_segment["port$i"]} ${net_vector_ether_tmp[@]}) )
+                        fi
+                    done
+                    continue
+                else
+                    net_vector_segment_tmp="${net_vector_segment_tmp} ${b}"
+                fi
+            done
+            if [ ${net_flag_segment_found} -eq 1 ]; then
+                net_vector_segment=( ${net_vector_segment_tmp} )
+                net_vector_ether=( ${net_vector_ether_tmp[@]} )
+                echo_ok "Segment ${OPT} deleted successfully"
+                net_flag_changed=1
+            else
+                echo_fail "Segment ${OPT} not found!"
+                return 1
+            fi
+        else
+            echo_fail "Please, insert a number for an existing segment"
+            return 1
+        fi
+    else
+        echo_fail "Please, insert a number for an existing segment"
+        return 1
+    fi
+}
+
+f_net_bonding_delete() {
+    bonding_number=$1
+
+    local -A net_bonding
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+    local b bp key value net_vector_bonding_tmp i
+    local net_flag_bonding_found=0
+    if [ ${#net_vector_bonding[@]} -eq 0 ]; then
+        echo_fail "There is no bonding for deleting"
+        return 1
+    fi
+    if [ "x$bonding_number" == "x" ]; then
+        echo
+        echo -n "  Insert bonding number: "
+        read OPT
+    else
+        OPT="$bonding_number"
+    fi
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            for b in ${net_vector_bonding[@]}; do
+                for bp in $(echo ${b} | sed 's/;/ /g'); do
+                    key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+                    value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+                    net_bonding[$key]=$value
+                done
+                if [ ${net_bonding['index']} -eq $OPT ]; then
+                    net_flag_bonding_found=1
+                    # we need to free the assigned ports for this bonding
+                    for i in 1 2; do
+                        if [ "x${net_bonding["port$i"]}" != "xnull" ]; then
+                            net_vector_ether_tmp=( $(f_net_port_set_idle ${net_bonding["port$i"]} ${net_vector_ether_tmp[@]}) )
+                        fi
+                    done
+                    continue
+                else
+                    net_vector_bonding_tmp="${net_vector_bonding_tmp} ${b}"
+                fi
+            done
+            if [ ${net_flag_bonding_found} -eq 1 ]; then
+                net_vector_bonding=( ${net_vector_bonding_tmp} )
+                net_vector_ether=( ${net_vector_ether_tmp[@]} )
+                echo_ok "Bonding bond${OPT} deleted successfully"
+                net_flag_changed=1
+            else
+                echo_fail "Bonding bond${OPT} not found!"
+                return 1
+            fi
+        else
+            echo_fail "Please, insert a number for an existing bonding"
+            return 1
+        fi
+    else
+        echo_fail "Please, insert a number for an existing bonding"
+        return 1
+    fi
+}
+
+f_net_bonding_new() {
+    #bonding_number=$1
+    bonding_number=0
+    #bonding_port=$2
+    bonding_port=1
+    bonding_port_ask_secondary=$3
+    #bonding_ip=$4
+    bonding_ip="10.0.209.201"
+    #bonding_mask=$5
+    bonding_mask="255.255.255.0"
+
+    local -A net_bonding
+    #local max_devices=$(($(f_net_device_list | wc -w)-1))
+    local max_devices=$((${net_bonding_max_devices}-1)) # bondings goes from 0 to ${max_devices}
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+    local net_bonding_port_default net_bonding_index_default
+
+    # First, index for bonding
+    net_bonding_index_default=$(f_net_bonding_get_free_index ${max_devices})
+    if [ "x${net_bonding_index_default}" == "xnull" -o "x${net_bonding_index_default}" == "x" ]; then
+        echo_fail "Reached max bonding to define!"
+        return 1
+    fi
+    if [ "x$bonding_number" == "x" ]; then
+        echo -n "  Insert bonding number (0-${max_devices}) [${net_bonding_index_default}]: "
+        read OPT
+        bonding_number=$OPT
+    else
+        OPT=$bonding_number
+    fi
+
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            if [ $OPT -ge 0 -a $OPT -le ${max_devices} ]; then
+                f_net_bonding_index_is_free $OPT
+                if [ $? -eq 0 ]; then
+                    net_bonding['index']="$OPT"
+                else
+                    echo_fail "The index $OPT is not free!"
+                    return 1
+                fi
+            else
+                echo_fail "Please, insert a number between 0 and ${max_devices}"
+                return 1
+            fi
+        else
+            echo_fail "Please, insert a number between 0 and ${max_devices}"
+            return 1
+        fi
+    else
+        net_bonding['index']="${net_bonding_index_default}"
+        bonding_number="${net_bonding_index_default}"
+    fi
+
+    # Now the first port for bonding (mandatory)
+    if [ "x$bonding_port" == "x" ]; then
+      echo
+      f_net_port_print_free ${net_vector_ether_tmp[@]}
+      echo
+    fi
+    net_bonding_port_default=$(f_net_port_get_free ${net_vector_ether_tmp[@]})
+    if [ "x${net_bonding_port_default}" == "xnull" ]; then
+        echo_fail "There is no free port to assign to bonding"
+        return 1
+    fi
+
+    if [ "x$bonding_port" == "x" ]; then
+        echo -n "  Insert bonding first port [${net_bonding_port_default}]: "
+        read OPT
+        bonding_port="$OPT"
+    else
+        OPT="$bonding_port"
+    fi
+
+    if [ -n "$OPT" ]; then
+        echo $OPT | egrep -q "^[[:digit:]]+$"
+        if [ $? -eq 0 ]; then
+            f_net_port_is_free $OPT ${net_vector_ether_tmp[@]}
+            if [ $? -eq 0 ]; then
+                net_bonding['port1']="$OPT"
+                net_vector_ether_tmp=( $(f_net_port_set_busy ${net_bonding['port1']} bond${net_bonding['index']} ${net_vector_ether_tmp[@]}) )
+                #net_vector_ether_tmp=( $(f_net_port_set_value ${net_bonding['port1']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+            else
+                echo_fail "Please, insert a free port index"
+                return 1
+            fi
+        else
+            echo_fail "Please, insert a free port index"
+            return 1
+        fi
+    else
+        net_bonding['port1']=${net_bonding_port_default}
+        net_vector_ether_tmp=( $(f_net_port_set_busy ${net_bonding['port1']} bond${net_bonding['index']} ${net_vector_ether_tmp[@]}) )
+        bonding_port=${net_bonding_port_default}
+        #net_vector_ether_tmp=( $(f_net_port_set_value ${net_bonding['port1']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+    fi
+
+    # Now the second port for bonding (optional)
+    if [ "x$bonding_port_ask_secondary" == "x" -o "x$bonding_port_ask_secondary" == "x1" ]; then
+        echo -n "  Insert second port (y/N)?: "
+        #read OPT
+        OPT="N"
+    else
+        OPT="N"
+    fi
+    if [ -n "$OPT" ]; then
+        if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+            echo
+            f_net_port_print_free ${net_vector_ether_tmp[@]}
+            echo
+            net_bonding_port_default=$(f_net_port_get_free ${net_vector_ether_tmp[@]})
+            if [ "x${net_bonding_port_default}" == "xnull" ]; then
+                echo_fail "There is no free port to assign to bonding ... skipping!"
+                net_bonding['port2']="null"
+            else
+                echo -n "  Insert bonding second port [${net_bonding_port_default}]: "
+                read OPT
+                if [ -n "$OPT" ]; then
+                    echo $OPT | egrep -q "^[[:digit:]]+$"
+                    if [ $? -eq 0 ]; then
+                        f_net_port_is_free $OPT ${net_vector_ether_tmp[@]}
+                        if [ $? -eq 0 ]; then
+                            net_bonding['port2']="$OPT"
+                            net_vector_ether_tmp=( $(f_net_port_set_busy ${net_bonding['port2']} bond${net_bonding['index']} ${net_vector_ether_tmp[@]}) )
+                            #net_vector_ether_tmp=( $(f_net_port_set_value ${net_bonding['port2']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+                        else
+                            echo_fail "Please, insert a free port index"
+                            return 1
+                        fi
+                    else
+                        echo_fail "Please, insert a free port index"
+                        return 1
+                    fi
+                else
+                    net_bonding['port2']=${net_bonding_port_default}
+                    net_vector_ether_tmp=( $(f_net_port_set_busy ${net_bonding['port2']} bond${net_bonding['index']} ${net_vector_ether_tmp[@]}) )
+                    #net_vector_ether_tmp=( $(f_net_port_set_value ${net_bonding['port2']} 'dna_mode' '0' ${net_vector_ether_tmp[@]}) )
+                fi
+            fi
+        else
+            net_bonding['port2']="null"
+        fi
+    else
+        net_bonding['port2']="null"
+    fi
+
+    # Next, IP and netmask
+    if [ "x$bonding_number" == "x0" -o "x${rb_is_manager}" != "x1" ]; then
+        iface_name="management"
+    elif [ "x$bonding_number" == "x1" ]; then
+        iface_name="sync"
+    else
+        iface_name="other"
+    fi
+    if [ "x$bonding_ip" == "x" ]; then
+        echo -n "  Insert "
+        f_set_color cyan
+        echo -n "$iface_name"
+        f_set_color norm
+        echo -n " IP address"
+        iface_current_ip=""
+        if [ -d /sys/class/net/bond${bonding_number} ]; then
+            iface_current_ip=$(ip a s bond${bonding_number} |grep inet |grep global |grep brd|head -n 1 | awk '{print $2}' | sed 's|/.*||')
+
+            if [ "x$iface_current_ip" != "x" ]; then
+                echo -n " [$iface_current_ip]"
+            fi
+        fi
+        echo -n ": "
+        read OPT
+        if [ "x$iface_current_ip" != "x" -a "x$OPT" == "x" ]; then
+             OPT="$iface_current_ip"
+        fi
+    else
+        OPT="$bonding_ip"
+    fi
+    if [ -n "$OPT" ]; then
+        f_ipok $OPT
+        if [ $? -eq 0 ]; then
+            f_net_bonding_ip_defined $OPT
+            if [ $? -eq 0 ]; then
+                echo_fail "Duplicated IP address $OPT in other bonding!"
+                return 1
+            else
+                net_bonding['ip']=$OPT
+            fi
+        else
+            echo_fail "IP address $OPT is not valid!"
+            return 1
+        fi
+    else
+        echo_fail "Need to insert a valid IP address!"
+        return 1
+    fi
+    if [ "x$bonding_mask" == "x" ]; then
+        echo -n "  Insert "
+        f_set_color cyan
+        echo -n "$iface_name"
+        f_set_color norm
+        echo -n " Netmask"
+        iface_current_mask="255.255.255.0"
+        if [ -d /sys/class/net/bond${bonding_number} ]; then
+            iface_current_mask=$(ip a s bond${bonding_number} |grep inet |grep global |grep brd|head -n 1 | awk '{print $2}' | sed 's|.*/||')
+
+            if [ "x$iface_current_mask" != "x" ]; then
+                iface_current_mask=$(f_masklen_to_netmask $iface_current_mask)
+            else
+                iface_current_mask="255.255.255.0" 
+            fi
+        fi
+        echo -n " [$iface_current_mask]: "
+        read OPT
+        if [ "x$iface_current_mask" != "x" -a "x$OPT" == "x" ]; then
+             OPT="$iface_current_mask"
+        fi
+    else
+        OPT="$bonding_mask"
+    fi
+    OPT=$(echo $OPT | sed 's/ //g')
+    if [ -n "$OPT" ]; then
+        f_maskok $OPT
+        if [ $? -eq 0 ]; then
+            net_bonding['netmask']=$OPT
+        else
+            OPT=$(f_masklen_to_netmask $OPT 2>/dev/null)
+            f_maskok $OPT
+            if [ $? -eq 0 ]; then
+                net_bonding['netmask']=$OPT
+            else
+
+                echo_fail "Netmask $OPT is not valid!"
+                return 1
+            fi
+        fi
+    else
+        net_bonding['netmask']="255.255.255.0"
+    fi
+    
+    net_bonding['routes']=""
+    net_bonding['gw']="null"
+
+    # Ask for default gw if it does not exist
+    f_net_bonding_default_gw_defined
+    if [ $? -eq 1 -a "x$bonding_ip" == "x" ]; then
+        echo -n "  Insert default gateway for this "
+        f_set_color cyan
+        echo -n "$iface_name"
+        f_set_color norm
+        echo -n " interface (Y/n)?: "
+        #read OPT
+        OPT="Y"
+        if [ "x$OPT" == "x" -o "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then 
+            default_gateway=$(ruby /opt/rb/bin/rb_network_utils.rb -n ${net_bonding['ip']} -m ${net_bonding['netmask']} -f)
+            echo -n "  Insert default gateway [${default_gateway}]: "
+            #read OPT
+            OPT="10.0.209.1"
+            if [ ! -n "$OPT" ]; then
+                OPT="${default_gateway}"
+            fi
+            if [ -n "$OPT" ]; then
+                f_ipok $OPT
+                if [ $? -eq 0 ]; then
+                    f_gwok $OPT ${net_bonding['ip']} ${net_bonding['netmask']}
+                    if [ $? -eq 0 ]; then
+                        net_bonding['gw']=$OPT
+                    else
+                        echo_fail "Gateway $OPT is not reacheable!"
+                        return 1
+                    fi
+                else
+                    echo_fail "Gateway $OPT is not valid!"
+                    return 1
+                fi
+            else
+                net_bonding['gw']="null"
+            fi
+        else
+            net_bonding['gw']="null"
+        fi
+    else
+        net_bonding['gw']="10.0.209.1"
+    fi
+    
+    local net_bonding_route_ip net_bonding_route_netmask net_bonding_route_gw
+    if [ "x$bonding_ip" == "x" ]; then
+        while : ; do
+            f_check_tty
+            echo -n "  Insert a route for this bonding (y/N)?: "
+            #read OPT
+            OPT="N"
+            if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+                echo -n "  Insert network address: "
+                read OPT
+                if [ -n "$OPT" ]; then
+                    f_ipok $OPT
+                    if [ $? -eq 0 ]; then
+                        net_bonding_route_ip=$OPT
+                    else
+                        echo_fail "IP address $OPT is not valid!"
+                        return 1
+                    fi
+                else
+                    echo_fail "Need to insert a valid IP address!"
+                    return 1
+                fi
+                echo -n "  Insert network netmask [255.255.255.0]: "
+                read OPT
+                if [ -n "$OPT" ]; then
+                    f_maskok $OPT
+                    if [ $? -eq 0 ]; then
+                        net_bonding_route_netmask=$OPT
+                    else
+                        echo_fail "Netmask $OPT is not valid!"
+                        return 1
+                    fi
+                else
+                    net_bonding_route_netmask="255.255.255.0"
+                fi
+                echo -n "  Insert network gw: "
+                read OPT
+                if [ -n "$OPT" ]; then
+                    f_ipok $OPT
+                    if [ $? -eq 0 ]; then
+                        f_gwok $OPT ${net_bonding['ip']} ${net_bonding['netmask']}
+                        if [ $? -eq 0 ]; then
+                            net_bonding_route_gw=$OPT
+                        else
+                            echo_fail "Gateway $OPT is not reacheable!"
+                            return 1
+                        fi
+                    else
+                        echo_fail "Gateway $OPT is not valid!"
+                        return 1
+                    fi
+                else
+                    echo_fail "Empty gateway is not valid!"
+                    return 1
+                fi
+            else
+                break
+            fi
+            net_bonding['routes']="${net_bonding['routes']},${net_bonding_route_ip}/${net_bonding_route_netmask}/${net_bonding_route_gw}"
+        done
+    fi
+    net_bonding['routes']=$(echo ${net_bonding['routes']} | sed 's/^,//')
+    if [ "x${net_bonding['routes']}" == "x" ]; then
+        net_bonding['routes']="null"
+    fi
+
+    local net_bonding_pre=""
+    for b in index port1 port2 ip netmask gw routes; do
+        net_bonding_pre="${net_bonding_pre};${b}=${net_bonding[${b}]}"
+    done
+    net_bonding_pre=$(echo ${net_bonding_pre} | sed 's/^;//')
+    net_vector_bonding=( ${net_vector_bonding[@]} "${net_bonding_pre}" )
+    net_vector_ether=( ${net_vector_ether_tmp[@]} )
+    net_flag_changed=1
+
+    echo_ok "  Bonding ${net_bonding['index']} created successfully"
+}
+
+f_net_mgmt_info() {
+
+    local b bp n key value m_bond c_bond flag_first route_ip route_netmask route_masklen route_gw
+    local -A net_bonding
+    echo "  # bond  ports  ip/masklen          routes"
+    echo "  ======  =====  ==========          ======"
+    for b in ${net_vector_bonding[@]}; do
+
+        for bp in $(echo ${b} | sed 's/;/ /g'); do
+            key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+            net_bonding[$key]=$value
+        done
+
+        m_bond="  ${net_bonding['index']}"
+        c_bond=$(echo "${m_bond}" | wc -c)
+        for n in $(seq ${c_bond} 9); do
+            m_bond="${m_bond} "
+        done
+
+        m_bond="${m_bond} ${net_bonding['port1']}"
+        if [ "x${net_bonding['port2']}" != "xnull" ]; then
+            m_bond="${m_bond},${net_bonding['port2']}"
+        fi
+        c_bond=$(echo "${m_bond}" | wc -c)
+        for n in $(seq ${c_bond} 16); do
+            m_bond="${m_bond} "
+        done
+
+        m_bond="${m_bond} ${net_bonding['ip']}/$(f_netmask_to_masklen ${net_bonding['netmask']})"
+        c_bond=$(echo "${m_bond}" | wc -c)
+        for n in $(seq ${c_bond} 36); do
+            m_bond="${m_bond} "
+        done
+
+        if [ "x${net_bonding['routes']}" == "xnull" -a "x${net_bonding['gw']}" == "xnull" ]; then
+            m_bond="${m_bond} -"
+            echo "${m_bond}"
+        else
+            flag_first=1
+            if [ "x${net_bonding['gw']}" != "xnull" ]; then
+                m_bond="${m_bond} default via ${net_bonding['gw']}"
+                echo "${m_bond}"
+                flag_first=0
+            fi
+            if [ "x${net_bonding['routes']}" != "xnull" ]; then
+                for route in $(echo ${net_bonding['routes']} | sed 's/,/ /'); do
+                    route_ip=$(echo ${route} | awk -F / '{print $1}')
+                    route_netmask=$(echo ${route} | awk -F / '{print $2}')
+                    route_masklen=$(f_netmask_to_masklen ${route_netmask})
+                    route_gw=$(echo ${route} | awk -F / '{print $3}')
+                    if [ ${flag_first} -eq 1 ]; then
+                        flag_first=0
+                        m_bond="${m_bond} ${route_ip}/${route_masklen} via ${route_gw}"
+                    else
+                        m_bond=""
+                        for n in $(seq 0 35); do
+                            m_bond="${m_bond} "
+                        done
+                        m_bond="${m_bond} ${route_ip}/${route_masklen} via ${route_gw}"
+                    fi
+                    echo "${m_bond}"
+                done
+            fi
+        fi
+    done
+}
+
+f_dns_primary() {
+
+    echo
+    echo -n "  Insert Primary DNS IP address: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_ipok $OPT
+        if [ $? -eq 0 ]; then
+            dns_primary=$OPT
+        else
+            echo_fail "IP address $OPT is not valid!"
+        fi
+    fi
+}
+
+f_dns_secondary() {
+
+    echo
+    echo -n "  Insert Secondary DNS IP address: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_ipok $OPT
+        if [ $? -eq 0 ]; then
+            dns_secondary=$OPT
+        else
+            echo_fail "IP address $OPT is not valid!"
+        fi
+    fi
+
+}
+
+f_dns_domain() {
+
+    echo
+    echo -n "  Insert DNS Domain: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_domainok $OPT
+        if [ $? -eq 0 ]; then
+            dns_domain=$OPT
+        else
+            echo_fail "DNS Domain $OPT is not valid!"
+        fi
+    fi
+
+}
+
+f_net_ipmi_wizard() {
+
+    echo
+    echo -n "  Insert IPMI IP address: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_ipok $OPT
+        if [ $? -eq 0 ]; then
+            net_ipmi_ip=$OPT
+        else
+            echo_fail "IP address $OPT is not valid!"
+            return 1
+        fi
+    else
+        echo_fail "exiting from wizard!"
+        return 1
+    fi
+
+    echo -n "  Insert IPMI Netmask: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_maskok $OPT
+        if [ $? -eq 0 ]; then
+            net_ipmi_netmask=$OPT
+        else
+            echo_fail "Netmask $OPT is not valid!"
+            return 1
+        fi
+    else
+        echo_fail "exiting from wizard!"
+        return 1
+    fi
+
+    echo -n "  Insert IPMI default Gateway: "
+    read OPT
+    if [ -n "$OPT" ]; then
+        f_gwok $OPT ${net_ipmi_ip} ${net_ipmi_netmask}
+        if [ $? -eq 0 ]; then
+            net_ipmi_gateway=$OPT
+        else
+            echo_fail "Gateway $OPT is not valid!"
+            return 1
+        fi
+    else
+        echo_fail "exiting from wizard!"
+        return 1
+    fi
+
+    echo
+    echo -n "  Next to apply IPMI settings ... are you sure (y/N)?: "
+    read OPT
+    if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+        # Set IPMI configuration values
+        echo
+        f_set_color orange
+        ipmitool lan set 1 ipsrc static
+        ipmitool lan set 1 ipaddr ${net_ipmi_ip}
+        ipmitool lan set 1 netmask ${net_ipmi_netmask}
+        ipmitool lan set 1 defgw ipaddr ${net_ipmi_gateway}
+        ipmitool sol set force-encryption true 1 
+        ipmitool sol set force-authentication true 1
+        ipmitool sol set character-accumulate-level 10 1
+        ipmitool sol set character-send-threshold 100 1
+        ipmitool sol set volatile-bit-rate 115.2 1
+        ipmitool sol set non-volatile-bit-rate 115.2 1
+        f_set_color norm
+
+        echo
+        echo_ok "IPMI Configuration wizard completed"
+    else
+        echo_warn "Exiting from wizard!"
+    fi
+
+}
+
+f_net_apply() {
+    start_cluster=1
+    [ "x$1" != "x" ] && start_cluster=0
+    
+    #f_is_local_tty
+    #if [ $? -ne 0 ]; then
+    #    echo_fail "The network must be configured under local tty"
+    #    return 1
+    #fi
+
+    if [ ${#net_vector_bonding[@]} -eq 0 ]; then
+        echo_fail "Need to define at least one Management Network (bonding)"
+        return 1
+    fi
+    if [ "x${rb_is_manager}" == "x1" ]; then
+        if [ ${#net_vector_bonding[@]} -eq 0 ]; then
+            f_set_color red
+            echo 
+            echo "  The manager needs at least one bonding: "
+            echo "    * bond0 - management "
+            echo "    * bond1 - internal (optional-non cluster)"
+            echo
+            f_set_color norm
+            echo -n "  Press ENTER to return to menu: "
+            read tashme
+            return 1
+        fi
+        echo "Stopping cluster services. Please be patient ..."
+	/opt/rb/bin/rb_service stop
+    fi
+
+    #local net_flag_service_snortd_started=0
+    local e ep key value module 
+    local -A ether net_module net_module_dna_list net_module_dna_support
+    local -A net_ether_devname
+    local -a net_vector_ether_tmp=( ${net_vector_ether[@]} )
+
+    service chef-client stop
+    [ -f /etc/init.d/snortd ] && service snortd stop 
+    service network stop
+    for e in /etc/sysconfig/network-scripts/ifcfg-*; do
+        if [ "x$(basename $e)" == "xifcfg-lo" ]; then
+            continue
+        else
+            rm -f $e
+        fi
+    done
+    service kdump stop &>/dev/null
+
+    rm -f /etc/sysconfig/network-scripts/route-*
+
+    # Go through the network module list, removes it and reset udev rules for networking
+    local i_eth=0
+    local i_dna=0
+    local pfring_bypass_interfaces=""
+    rm -f /etc/udev/rules.d/75-redBorder-persistent-net.rules
+    [ -f /etc/udev/rules.d/70-persistent-net.rules ] && echo > /etc/udev/rules.d/70-persistent-net.rules
+    for e in ${net_vector_ether_tmp[@]}; do
+        for ep in $(echo ${e} | sed 's/;/ /g'); do
+            key=$(echo ${ep} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${ep} | sed 's/.*=\([^=]\)/\1/')
+            ether[$key]=$value
+        done
+        if [ "x${net_module[${ether['driver']}]}" == "x" ]; then
+            net_module[${ether['driver']}]=1
+        else
+            net_module[${ether['driver']}]=$((${net_module[${ether['driver']}]}+1))
+        fi
+        if [ ${ether['dna_support']} -eq 0 ]; then
+            if [ "x${net_module_dna_support[${ether['driver']}]}" == "x" ]; then
+                net_module_dna_support[${ether['driver']}]=0
+            fi
+            net_ether_devname[${ether['index']}]="eth${i_eth}"
+            i_eth=$((${i_eth}+1))
+        else
+            net_module_dna_support[${ether['driver']}]=1
+            if [ ${net_flag_dna_support} -eq 1 -a "x${ether['dna_mode']}" == "x1" -a "x${ether['busy_dev_type']}" == "segment" ]; then
+                net_ether_devname[${ether['index']}]="dna${i_dna}"
+                net_module_dna_list[${ether['driver']}]="${net_module_dna_list[${ether['driver']}]} ${ether['mac']}"
+                i_dna=$((${i_dna}+1))
+            else
+                net_ether_devname[${ether['index']}]="eth${i_eth}"
+                i_eth=$((${i_eth}+1))
+            fi
+        fi
+        cat >> /etc/udev/rules.d/75-redBorder-persistent-net.rules <<EOF
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", ATTR{address}=="${ether['mac']}", ATTR{type}=="1", KERNEL=="?*", NAME="${net_ether_devname[${ether['index']}]}"
+EOF
+        if [ "x${ether['bypass_support']}" == "x1" ]; then
+            if [ "x${pfring_bypass_interfaces}" == "x" ]; then
+                pfring_bypass_interfaces="${net_ether_devname[${ether['index']}]}"
+            else
+                pfring_bypass_interfaces="${pfring_bypass_interfaces},${net_ether_devname[${ether['index']}]}"
+            fi
+        fi
+    done
+
+    for e in ${!net_module[@]}; do
+        rmmod ${e} &>/dev/null
+    done
+    rmmod bridge &>/dev/null
+    rmmod bonding &>/dev/null
+    rmmod pf_ring &>/dev/null
+    # wait for module unload
+    sleep 3
+    
+    # Reset module configs and insert it again
+    local net_queues=$(ls -d /sys/class/cpuid/* | wc -l)
+    local module_options
+    local num_segments=${#net_vector_segment[*]}
+    rm -f /etc/modprobe.d/redBorder.conf
+
+    if [ "x${rb_is_sensor}" == "x1" ]; then
+        # check for bypass_interfaces module param in pf_ring
+        modinfo pf_ring | grep -q bypass_interfaces
+        MEMTOTAL=$(cat /proc/meminfo |grep MemTotal|awk '{print $2}')
+        if [ $MEMTOTAL -lt 32000000 ]; then
+            NUM_SLOTS=$((16384*1)) # 16k
+        elif [ $MEMTOTAL -lt 64000000 ]; then
+            if [ ${num_segments} -eq 1 ]; then
+                NUM_SLOTS=$((16384*4)) # 64k
+            elif [ ${num_segments} -eq 2 ]; then
+                NUM_SLOTS=$((16384*2)) # 32k
+            elif [ ${num_segments} -eq 3 ]; then
+                NUM_SLOTS=$((16384*2)) # 32k
+            else # >=4 segments
+                NUM_SLOTS=$((16384*1)) # 16k
+            fi
+        else # >= 64Gbytes
+            if [ ${num_segments} -eq 1 ]; then
+                NUM_SLOTS=$((16384*8)) # 128k
+            elif [ ${num_segments} -le 4 ]; then
+                NUM_SLOTS=$((16384*4)) # 64k
+            else
+                NUM_SLOTS=$((16384*2)) # 32k
+            fi
+        fi
+
+	if [ $NUM_SLOTS -gt 16384 -a $net_queues -gt 8 ]; then
+        	NUM_SLOTS=$(($NUM_SLOTS/2))
+	fi
+
+  
+        if [ $? -eq 0 ]; then
+            echo "options pf_ring enable_tx_capture=0 enable_frag_coherence=1 min_num_slots=$NUM_SLOTS bypass_interfaces=${pfring_bypass_interfaces}" >> /etc/modprobe.d/redBorder.conf
+        else
+            echo "options pf_ring enable_tx_capture=0 enable_frag_coherence=1 min_num_slots=$NUM_SLOTS" >> /etc/modprobe.d/redBorder.conf
+        fi
+    fi
+    # recreate modules dependencies
+    if [ ! -f /etc/depmod.d/kmod-redBorder.conf -a "x${rb_is_sensor}" == "x1" ]; then
+        cat >/etc/depmod.d/kmod-redBorder.conf <<EOF
+#
+# depmod.conf
+#
+# redBorder depmod configuration
+# override default search ordering for kmod packaging
+override bpctl_mod * weak-updates/bpctl_mod
+override pf_ring   * weak-updates/pf_ring
+override ixgbe * weak-updates/ixgbe
+EOF
+    fi
+    depmod
+    for e in ${!net_module[@]}; do
+        modprobe ${e} 2>&1 | logger -t rb_sysconf
+    done
+    # wait for modules init
+    sleep 3
+
+    # need to inser module pf_ring now
+    modprobe pf_ring
+ 
+    # Now it is time to configure network!
+
+    # First, bondings ...
+    local -A net_bonding
+    local port_bypass
+    local b bp route route_index
+    for b in ${net_vector_bonding[@]}; do
+        for bp in $(echo ${b} | sed 's/;/ /g'); do
+            key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+            net_bonding[$key]=$value
+        done
+        for i in 1 2; do
+            port_bypass=$(f_net_port_get_value ${net_bonding["port$i"]} 'bypass_support' ${net_vector_ether_tmp[@]})
+            if [ "x${port_bypass}" == "x1" ]; then
+                port_bypass=$(f_net_port_get_value ${net_bonding["port$i"]} 'bypass_master' ${net_vector_ether_tmp[@]})
+                if [ "x${port_bypass}" == "x1" ]; then
+                    # this port is a bypass master ... need to set to standard nic
+                    port_bypass=$(f_net_port_get_devname ${net_bonding["port$i"]})
+                    bpctl_util ${net_ether_devname[${net_bonding["port${i}"]}]} set_std_nic on
+                    break
+                fi
+            fi
+        done
+        # The bonding device
+        cat >/etc/sysconfig/network-scripts/ifcfg-bond${net_bonding['index']} <<EOF
+DEVICE=bond${net_bonding['index']}
+ONBOOT=yes
+BOOTPROTO=none
+BONDING_OPTS='mode=1 miimon=100'
+IPADDR=${net_bonding['ip']}
+NETMASK=${net_bonding['netmask']}
+EOF
+        if [ "x${net_bonding['gw']}" != "xnull" ]; then
+        sed -i "s/^GATEWAYDEV=.*/GATEWAYDEV=bond${net_bonding['index']}/" /etc/sysconfig/network
+        cat >>/etc/sysconfig/network-scripts/ifcfg-bond${net_bonding['index']} <<EOF
+GATEWAY=${net_bonding['gw']}
+EOF
+        fi
+        # The routes for this bonding
+        if [ "x${net_bonding['routes']}" != "xnull" ]; then
+            route_index=0
+            for route in $(echo ${net_bonding['routes']} | sed 's/,/ /'); do
+                cat >>/etc/sysconfig/network-scripts/route-bond${net_bonding['index']} <<EOF
+ADDRESS${route_index}=$(echo ${route} | awk -F / '{print $1}')
+NETMASK${route_index}=$(echo ${route} | awk -F / '{print $2}')
+GATEWAY${route_index}=$(echo ${route} | awk -F / '{print $3}')
+EOF
+                route_index=$((${route_index}+1))
+            done
+        fi
+        # The slave devices
+        for e in ${net_bonding['port1']} ${net_bonding['port2']}; do
+            if [ "x$e" == "xnull" ]; then
+                continue
+            fi
+            cat >/etc/sysconfig/network-scripts/ifcfg-${net_ether_devname[$e]} <<EOF
+DEVICE="${net_ether_devname[$e]}"
+NM_CONTROLLED="no"
+ONBOOT="yes"
+HWADDR="$(f_net_port_get_value $e 'mac' ${net_vector_ether_tmp[@]})"
+BOOTPROTO=none
+MASTER=bond${net_bonding['index']}
+SLAVE=yes
+EOF
+        done
+    done
+
+    local -A net_segment
+    local net_segment_devname dna
+    # Next, segment devices ...
+    for b in ${net_vector_segment[@]}; do
+        for bp in $(echo ${b} | sed 's/;/ /g'); do
+            key=$(echo ${bp} | sed 's/\([^=]\)=.*/\1/')
+            value=$(echo ${bp} | sed 's/.*=\([^=]\)/\1/')
+            net_segment[$key]=$value
+        done
+        net_segment_devname="br"
+        for i in 1 2; do
+            port_bypass=$(f_net_port_get_value ${net_segment["port$i"]} 'bypass_support' ${net_vector_ether_tmp[@]})
+            if [ "x${port_bypass}" == "x1" ]; then
+                net_segment_devname="bpbr"
+                port_bypass=$(f_net_port_get_value ${net_segment["port$i"]} 'bypass_master' ${net_vector_ether_tmp[@]})
+                if [ "x${port_bypass}" == "x1" ]; then
+                    # this port is a bypass master ... need to set to bypass mode
+                    port_bypass=$(f_net_port_get_devname ${net_segment["port$i"]})
+                    bpctl_util ${net_ether_devname[${net_segment["port${i}"]}]} set_std_nic off
+                    bpctl_util ${net_ether_devname[${net_segment["port${i}"]}]} set_bypass on
+                    break
+                fi
+            fi
+        done
+        # The bridge device
+        cat >/etc/sysconfig/network-scripts/ifcfg-${net_segment_devname}${net_segment['index']} <<EOF
+DEVICE=${net_segment_devname}${net_segment['index']}
+TYPE=Bridge
+BOOTPROTO=none
+ONBOOT=yes
+IPV6_AUTOCONF=no
+IPV6INIT=no
+DELAY=0
+STP=off
+EOF
+        # The slave devices
+        dna=0
+        for e in ${net_segment['port1']} ${net_segment['port2']}; do
+            if [ "x$e" == "xnull" ]; then
+                continue
+            fi
+            if [ ${net_segment['dna']} -eq 0 ]; then
+                # Segment without DNA support
+                dna=0
+            else
+                # Segment with DNA support
+                if [ ${net_flag_dna_support} -eq 0 ]; then
+                    # DNA is not enabled
+                    dna=0
+                else
+                    # Segment with DNA support and DNA enabled
+                    dna=1
+                fi
+            fi
+            if [ ${dna} -eq 0 ]; then
+                cat >/etc/sysconfig/network-scripts/ifcfg-${net_ether_devname[$e]} <<EOF
+DEVICE="${net_ether_devname[$e]}"
+BRIDGE="${net_segment_devname}${net_segment['index']}"
+TYPE=Ethernet
+HWADDR="$(f_net_port_get_value $e 'mac' ${net_vector_ether_tmp[@]})"
+BOOTPROTO=none
+NM_CONTROLLED="no"
+ONBOOT="yes"
+IPV6_AUTOCONF=no
+IPV6INIT=no
+DELAY=0
+STP=off
+EOF
+            else
+                cat >/etc/sysconfig/network-scripts/ifcfg-${net_ether_devname[$e]} <<EOF
+DEVICE="${net_ether_devname[$e]}"
+BRIDGE="${net_segment_devname}${net_segment['index']}"
+TYPE=Ethernet
+HWADDR="$(f_net_port_get_value $e 'mac' ${net_vector_ether_tmp[@]})"
+BOOTPROTO=none
+NM_CONTROLLED="no"
+ONBOOT="yes"
+IPV6_AUTOCONF=no
+IPV6INIT=no
+DELAY=0
+STP=off
+EOF
+
+            fi
+
+        done
+
+    done
+ 
+    net_vector_ether=( ${net_vector_ether_tmp[@]} )
+    net_flag_changed=0
+
+    service network start
+
+    [ "x${rb_is_sensor}" == "x1" -a "x$sys_ip_rb_manager" != "x127.0.0.1" ] && service chef-client start
+    [ "x${rb_is_manager}" == "x1" -a "x$start_cluster" == "x1" ] && /opt/rb/bin/rb_service start
+
+    rm -f /boot/initrd*kdump.*
+    service kdump start
+}
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

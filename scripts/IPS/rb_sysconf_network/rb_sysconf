@@ -1,0 +1,252 @@
+#!/bin/bash
+#
+# 2011 (c) Eneo Tecnologia S.L.
+# Authors: jjprieto@eneotecnologia.com, pablonebrera@eneotecnologia.com
+#
+# Script for config rb system
+
+#DEBUG=1
+
+#TTY=$(tty 2>/dev/null)
+#if [ $? -ne 0 ]; then
+#    # tty not valid
+#    exit 1
+#fi
+
+[ -f /etc/profile ] && source /etc/profile
+
+RES_COL=60
+MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+LOCALREPO="/opt/rb/var/www/repo"
+LOCKFILE="/var/lock/rb_sysconf.lck"
+
+if [ -n "$DEBUG" ]; then
+	exec 2> /var/log/rb_sysconf.log
+	set -x
+fi
+
+f_trap_exit() {
+
+	rm -f $LOCKFILE
+	echo
+	exit 0
+}
+
+f_trap() {
+
+	echo -n
+}
+
+f_exist_globally() {
+    BOND0=$(ip a s bond0 2>/dev/null |grep inet|grep global)
+
+    if [ "x$BOND0" != "x" -a -f /opt/rb/etc/cluster.lock -a ${rb_is_manager} -eq 1 ]; then
+        echo
+        echo -n "Would you like to start node configuration? (y/N) "
+        read VAR
+        if [ "x$VAR" == "xy" -o "x$VAR" == "xY" ]; then
+            [ "x$join_cluster" == "x" -a -f /opt/rb/bin/rb_configure_master.sh ] && /opt/rb/bin/rb_configure_master.sh -f
+            rm -f /opt/rb/etc/cluster.lock
+            /opt/rb/bin/rb_wakeup_chef
+        fi
+    fi
+
+    echo
+    echo "Exiting rb_sysconf"
+    echo
+}
+
+trap 'f_trap' 2 5 sigtstp
+trap 'f_trap_exit' 0 15
+
+
+if [ -f $LOCKFILE ]; then
+	echo "The lock file $LOCKFILE exist ... exiting!"
+	exit 1
+fi
+
+echo $$ > $LOCKFILE
+
+[ -f /opt/rb/etc/rb_sysconf.conf.default -a ! -f /opt/rb/etc/rb_sysconf.conf ] && cp /opt/rb/etc/rb_sysconf.conf.default /opt/rb/etc/rb_sysconf.conf
+[ -f /opt/rb/etc/rb_sysconf.conf ] && source /opt/rb/etc/rb_sysconf.conf
+source /opt/rb/bin/rb_sysconf_common
+source /opt/rb/bin/rb_sysconf_net_common
+source /opt/rb/bin/rb_sysconf_net
+source /opt/rb/bin/rb_sysconf_passwd
+source /opt/rb/bin/rb_sysconf_system
+source /opt/rb/bin/rb_sysconf_backup
+source /opt/rb/bin/rb_sysconf_base
+
+f_conf_update_repository() {
+
+	if [ "x${rb_is_manager}" == "x1" ]; then
+		if [ -f /etc/yum.repos.d/redBorder-IPSinHouse.repo ]; then
+			remote_repo=`cat /etc/yum.repos.d/redBorder-IPSinHouse.repo |grep "^baseurl="|sed 's/baseurl=//'`
+			if [ "x$remote_repo" != "x" ]; then
+				remote_repo="${remote_repo}/RPMS"
+				echo 
+				echo "  The local repository will be updated"
+				echo "    - URL: ${remote_repo}"
+				echo -n "  Are you sure you want to continue? (y/N) "
+				read VAR
+				if [ "x$VAR" == "xy" -o "x$VAR" == "xY" ]; then
+					mkdir -p $LOCALREPO
+					pushd $LOCALREPO &>/dev/null
+					echo "  Downloading repo from ${remote_repo}."
+					echo -n "  Please wait ... "
+					local lock_ticker_file="ticker_$RANDOM"
+					if [ -z "$DEBUG" ]; then
+						stty_orig=$(stty -g)
+						stty -echo
+						f_ticker_start ${lock_ticker_file}
+						wget --quiet -r -A.rpm -N -nd --directory-prefix=/opt/rb/var/www/repo/ http://www.redborder.net/dist/IPSinHouse/RPMS/
+						RET1=$?
+						f_ticker_stop ${lock_ticker_file}
+						stty ${stty_orig}
+						p_ok_fail $RET1
+					else
+						wget -r -A.rpm -N -nd --directory-prefix=/opt/rb/var/www/repo/ http://www.redborder.net/dist/IPSinHouse/RPMS/
+					fi
+
+					echo -n "  Creating new local repo. Please wait ... "
+					if [ -z "$DEBUG" ]; then
+						stty_orig=$(stty -g)
+						stty -echo
+						f_ticker_start ${lock_ticker_file}
+						createrepo $LOCALREPO &>/dev/null
+						RET2=$?
+						f_ticker_stop ${lock_ticker_file}
+						stty ${stty_orig}
+						p_ok_fail $RET2
+					else
+						createrepo $LOCALREPO
+					fi
+					chown apache:apache -R $LOCALREPO
+					popd &>/dev/null
+					if [ -z "$DEBUG" ]; then
+						if [ $RET1 -eq 0 -a $RET2 -eq 0 ]; then
+							echo_ok "The local repository has been updated successfully!"
+						else
+							echo_fail "The local repository has been updated with errors!"
+						fi
+						echo -n "  Press a key to continue ... "
+					fi
+					read VAR
+				fi
+			else
+				echo_fail "Cannot obtain baseurl in /etc/yum.repos.d/redBorder-IPSinHouse.repo"
+			fi				
+		else
+			echo_fail "Remote repository not found!!"
+		fi
+	fi
+}
+
+f_conf_get_sensor_rule() {
+        echo
+        /opt/rb/bin/rb_get_sensor_rules.sh
+        echo
+        echo -n "Press a key to continue ... "
+        read trashme
+}
+
+
+f_main() {
+
+	f_set_color norm
+	echo -n "Getting data. Please wait ... "
+	f_sys_init
+	f_net_init
+	f_bak_init
+	f_set_color green
+	echo done
+	f_set_color norm
+		
+	while [ 1 ]; do
+ 
+	f_check_tty
+
+	[ -z "$DEBUG" ] && clear
+	cat <<EOF
+
+                        redBorder configuration menu
+
+
+  1) System configuration
+  2) Network configuration
+  3) Passwords
+  4) Backup system
+EOF
+        if [ "x${rb_is_sensor}" == "x1" ]; then
+echo "  5) Update rules from Manager"
+        fi
+
+        echo
+
+        if [ "x${rb_is_manager}" == "x1" -a -f /opt/rb/etc/enterprise ]; then
+		f_set_color cyan
+echo "                                  w) start simple wizard"
+		f_set_color norm
+	fi
+cat <<EOF
+                                  q) quit
+
+  ----------------------------------------------------------------------------
+EOF
+	f_date
+	echo -n "       Selection: "
+
+	#read OPT
+#         
+#		case $OPT in
+#			q | Q)	f_exist_globally
+#				break
+#				;;
+#                        w )     [ "x${rb_is_manager}" == "x1" -a -f /opt/rb/etc/enterprise ] && f_wizard
+#                                ;;
+#			1 )	f_conf_system
+#				;;
+#			2 )	f_conf_network
+#				;;
+#			3 )	f_conf_password
+#				;;
+#			4 )	f_conf_backup
+#				;;
+#			5 )	[ "x${rb_is_sensor}" == "x1" ] && f_conf_get_sensor_rule 
+#				;;
+#		esac
+#	done
+          #Jenkins
+          #f_conf_rb_manager
+	  f_net_bonding_new
+	  f_net_domain_wizard
+	  f_net_segment_new
+	  f_net_apply
+	  f_save
+          f_exist_globally
+          break
+        done
+}
+
+superuser="root"
+
+if [ "x$(basename $0)" == "xrb_sysconf_admin" ]; then
+        superuser="admin"
+fi
+
+while getopts ":a" opt; do
+  case $opt in
+    a)
+      superuser="admin"
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      ;;
+  esac
+done
+
+f_main
+
+exit 0
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

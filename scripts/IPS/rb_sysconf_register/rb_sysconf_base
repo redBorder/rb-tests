@@ -1,0 +1,690 @@
+#!/bin/bash
+
+f_select_manager_mode() {
+    echo 
+    f_set_color blue
+    echo -n "  INFO: "
+    f_set_color norm
+    # TODO add a description
+    echo "What is the manager mode selected for the current node? "
+    echo -n "     1) "; f_set_color lblue; echo -n "slave            " ; f_set_color norm; echo " = all services"
+    echo -n "     2) "; f_set_color lblue; echo -n "compute          " ; f_set_color norm; echo " = realtime+historical"
+    echo -n "     3) "; f_set_color lblue; echo -n "realtime         " ; f_set_color norm; echo " = realtime olap node"
+    echo -n "     4) "; f_set_color lblue; echo -n "historical       " ; f_set_color norm; echo " = historical olap node"
+    echo -n "     5) "; f_set_color lblue; echo -n "zookeeper        " ; f_set_color norm; echo " = zookeeper"
+    echo -n "     6) "; f_set_color lblue; echo -n "kafka            " ; f_set_color norm; echo " = kafka queue server"
+    echo -n "     7) "; f_set_color lblue; echo -n "zoo_kafka        " ; f_set_color norm; echo " = zookeeper + kafka"
+    echo -n "     8) "; f_set_color lblue; echo -n "database         " ; f_set_color norm; echo " = postgresql server"
+    echo -n "     9) "; f_set_color lblue; echo -n "web              " ; f_set_color norm; echo " = nginx + rb-webui + rb-workers"
+    echo -n "    10) "; f_set_color lblue; echo -n "web full         " ; f_set_color norm; echo " = nginx + rb-webui + rb-workers + broker + coordinator"
+    echo -n "    11) "; f_set_color lblue; echo -n "s3               " ; f_set_color norm; echo " = riak"
+    echo -n "    12) "; f_set_color lblue; echo -n "hadoop           " ; f_set_color norm; echo " = namenode + jobtracker + datanode + tasktracker"
+    echo -n "    13) "; f_set_color lblue; echo -n "storm_nimbus     " ; f_set_color norm; echo " = storm_nimbus"
+    echo -n "    14) "; f_set_color lblue; echo -n "storm_supervisor " ; f_set_color norm; echo " = storm_supervisor"
+    echo -n "    15) "; f_set_color lblue; echo -n "nprobe           " ; f_set_color norm; echo " = nprobe"
+    echo -n "    16) "; f_set_color lblue; echo -n "zoo_web          " ; f_set_color norm; echo " = zookeeper + kafka"
+    echo -n "    17) "; f_set_color lblue; echo -n "core             " ; f_set_color norm; echo " = chef + coordinator + nimbus + postgresql"
+    echo -n "    18) "; f_set_color lblue; echo -n "consumer         " ; f_set_color norm; echo " = nprobe + n2klocd + freeradius + trap2kafka"
+    echo -n "    19) "; f_set_color lblue; echo -n "nginx            " ; f_set_color norm; echo " = nginx"
+    echo -n "    20) "; f_set_color lblue; echo -n "brokerweb        " ; f_set_color norm; echo " = nginx + rb-webui + rb-workers + broker"
+    echo -n "    21) "; f_set_color lblue; echo -n "kafkaconsumer    " ; f_set_color norm; echo " = kafka + nprobe + n2klocd"
+    echo -n "    22) "; f_set_color lblue; echo -n "custom (default) " ; f_set_color norm; echo " = no services by default. Service can be edited later"
+
+    echo -n "  Choose an option: "
+    read MANAGER_SEL_MODE
+
+    if [ "x$MANAGER_SEL_MODE"   == "x1" ]; then
+        MANAGER_SEL_MODE="slave"
+    elif [ "x$MANAGER_SEL_MODE" == "x2" ]; then
+        MANAGER_SEL_MODE="compute"
+    elif [ "x$MANAGER_SEL_MODE" == "x3" ]; then
+        MANAGER_SEL_MODE="realtime"
+    elif [ "x$MANAGER_SEL_MODE" == "x4" ]; then
+        MANAGER_SEL_MODE="historical"
+    elif [ "x$MANAGER_SEL_MODE" == "x5" ]; then
+        MANAGER_SEL_MODE="zookeeper"
+    elif [ "x$MANAGER_SEL_MODE" == "x6" ]; then
+        MANAGER_SEL_MODE="kafka"
+    elif [ "x$MANAGER_SEL_MODE" == "x7" ]; then
+        MANAGER_SEL_MODE="zoo_kafka"
+    elif [ "x$MANAGER_SEL_MODE" == "x8" ]; then
+        MANAGER_SEL_MODE="database"
+    elif [ "x$MANAGER_SEL_MODE" == "x9" ]; then
+        MANAGER_SEL_MODE="web"
+    elif [ "x$MANAGER_SEL_MODE" == "x10" ]; then
+        MANAGER_SEL_MODE="web_full"
+    elif [ "x$MANAGER_SEL_MODE" == "x11" ]; then
+        MANAGER_SEL_MODE="s3"
+    elif [ "x$MANAGER_SEL_MODE" == "x12" ]; then
+        MANAGER_SEL_MODE="hadoop"
+    elif [ "x$MANAGER_SEL_MODE" == "x13" ]; then
+        MANAGER_SEL_MODE="storm_nimbus"
+    elif [ "x$MANAGER_SEL_MODE" == "x14" ]; then
+        MANAGER_SEL_MODE="storm_supervisor"
+    elif [ "x$MANAGER_SEL_MODE" == "x15" ]; then
+        MANAGER_SEL_MODE="nprobe"
+    elif [ "x$MANAGER_SEL_MODE" == "x16" ]; then
+        MANAGER_SEL_MODE="zoo_web"
+    elif [ "x$MANAGER_SEL_MODE" == "x17" ]; then
+        MANAGER_SEL_MODE="core"
+    elif [ "x$MANAGER_SEL_MODE" == "x18" ]; then
+        MANAGER_SEL_MODE="consumer"
+    elif [ "x$MANAGER_SEL_MODE" == "x19" ]; then
+        MANAGER_SEL_MODE="nginx"
+    elif [ "x$MANAGER_SEL_MODE" == "x20" ]; then
+        MANAGER_SEL_MODE="brokerweb"
+    elif [ "x$MANAGER_SEL_MODE" == "x21" ]; then
+        MANAGER_SEL_MODE="kafkaconsumer"
+    elif [ "x$MANAGER_SEL_MODE" == "x22" ]; then
+        MANAGER_SEL_MODE="custom"
+    elif [ "x$MANAGER_SEL_MODE" == "x" ]; then
+        MANAGER_SEL_MODE="custom"
+    fi
+
+    if [ "x$MANAGER_SEL_MODE" != "xslave" -a "x$MANAGER_SEL_MODE" != "xcompute" -a "x$MANAGER_SEL_MODE" != "xrealtime" -a "x$MANAGER_SEL_MODE" != "xhistorical" -a "x$MANAGER_SEL_MODE" != "xkafka" -a "x$MANAGER_SEL_MODE" != "xzookeeper" -a "x$MANAGER_SEL_MODE" != "xdatabase" -a "x$MANAGER_SEL_MODE" != "xweb" -a "x$MANAGER_SEL_MODE" != "xs3" -a "x$MANAGER_SEL_MODE" != "xhadoop" -a "x$MANAGER_SEL_MODE" != "xstorm_nimbus" -a "x$MANAGER_SEL_MODE" != "xstorm_supervisor" -a "x$MANAGER_SEL_MODE" != "xnprobe" -a "x$MANAGER_SEL_MODE" != "xzoo_kafka" -a "x$MANAGER_SEL_MODE" != "xweb_full" -a "x$MANAGER_SEL_MODE" != "xkafkaconsumer" -a "x$MANAGER_SEL_MODE" != "xkafkaconsumer" -a "x$MANAGER_SEL_MODE" != "xcoreriak" -a "x$MANAGER_SEL_MODE" != "xbrokerweb" -a "x$MANAGER_SEL_MODE" != "xzoo_web" -a "x$MANAGER_SEL_MODE" != "xcore" -a "x$MANAGER_SEL_MODE" != "xcorezk" -a "x$MANAGER_SEL_MODE" != "xconsumer" -a "x$MANAGER_SEL_MODE" != "xnginx" -a "x$MANAGER_SEL_MODE" != "xenrichment" -a "x$MANAGER_SEL_MODE" != "xcustom"  -a "x$MANAGER_SEL_MODE" != "xmiddleManager" -a "x$MANAGER_SEL_MODE" != "xcoreplus" -a "x$MANAGER_SEL_MODE" != "xsamza" ]; then
+        MANAGER_SEL_MODE=""
+    fi
+}
+
+f_sys_rb_register() {
+    sys_manager_rsa=""
+
+    [ "x$1" != "x" ] && sys_ip_rb_manager="$1"
+    [ "x$2" != "x" ] && sys_manager_mode="$2"
+    [ "x$3" != "x" ] && sys_manager_rsa="$3"
+
+    OPT="n"
+    if  [ "x$sys_ip_rb_manager" != "x" ]; then
+        if [ "x$sys_flag_need_apply" == "x0" -o "x$sys_flag_need_apply" == "x" ]; then
+            OPT="y"
+            #if [ -f $CLIENTPEM ]; then
+            #    if [ "x$sys_manager_mode" == "x" ]; then
+            #        echo
+            #        f_set_color blue
+            #        echo -n "  INFO: "
+            #        f_set_color norm
+            #        echo "The actual profile will be deleted."
+            #        echo  -n "  Are you sure you want to continue? (y/N): "
+            #        read OPT
+            #    else
+            #        OPT="y"
+            #    fi
+            #fi
+        else
+            echo_warn "There are changes that need to be applied before"
+        fi
+    else
+        echo_warn "You must apply with a valid manager"
+    fi
+
+    if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+        MANAGER_IFACE=$(ip r get "$sys_ip_rb_manager" 2>/dev/null |sed 's/.*dev //'|head -n 1 |awk '{print $1}')
+        if [ "x$MANAGER_IFACE" == "xlo" -o "x$MANAGER_IFACE" == "x" ]; then
+            echo_warn "The manager cannot be registered itself"
+            OPT="n"
+        else
+            if [ ${rb_is_manager} -eq 1 ]; then
+                if [ ! -f /opt/rb/etc/cluster-installed.txt -a -d /sys/class/net/bond0 -a ! -f /opt/rb/etc/cluster.lock ]; then 
+                    echo "  Please wait until the system is ready"
+                    sleep 5
+                    OPT="n"
+                elif [ "x$MANAGER_IFACE" != "xbond1" -a -d /sys/class/net/bond1 ]; then
+                    echo "  You must specify an ip belongs to the internal bonding (bond1)"
+                    sleep 5
+                    OPT="n"
+                fi
+            fi
+        fi
+    fi
+
+    if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+        DEBUG_OUTPUT=0
+
+        [ ! -f /etc/chef/client.rb -a -f /etc/chef/client.rb.default ] && cp /etc/chef/client.rb.default /etc/chef/client.rb            
+
+        if [ ${rb_is_manager} -eq 1 ]; then
+            if [ "x$sys_manager_mode" == "x" ]; then
+                f_select_manager_mode
+            else
+                MANAGER_SEL_MODE="$sys_manager_mode"
+            fi
+
+            [ "x$MANAGER_SEL_MODE" == "x" ] && MANAGER_SEL_MODE="custom"
+            if [ "x$MANAGER_SEL_MODE" != "xslave" -a "x$MANAGER_SEL_MODE" != "xcompute" -a "x$MANAGER_SEL_MODE" != "xrealtime" -a "x$MANAGER_SEL_MODE" != "xhistorical" -a "x$MANAGER_SEL_MODE" != "xkafka" -a "x$MANAGER_SEL_MODE" != "xzookeeper" -a "x$MANAGER_SEL_MODE" != "xdatabase" -a "x$MANAGER_SEL_MODE" != "xweb" -a "x$MANAGER_SEL_MODE" != "xs3" -a "x$MANAGER_SEL_MODE" != "xhadoop" -a "x$MANAGER_SEL_MODE" != "xstorm_nimbus" -a "x$MANAGER_SEL_MODE" != "xstorm_supervisor" -a "x$MANAGER_SEL_MODE" != "xnprobe" -a "x$MANAGER_SEL_MODE" != "xzoo_kafka" -a "x$MANAGER_SEL_MODE" != "xweb_full" -a "x$MANAGER_SEL_MODE" != "xkafkaconsumer" -a "x$MANAGER_SEL_MODE" != "xkafkaconsumer" -a "x$MANAGER_SEL_MODE" != "xcoreriak" -a "x$MANAGER_SEL_MODE" != "xbrokerweb" -a "x$MANAGER_SEL_MODE" != "xzoo_web" -a "x$MANAGER_SEL_MODE" != "xcore" -a "x$MANAGER_SEL_MODE" != "xcorezk" -a "x$MANAGER_SEL_MODE" != "xconsumer" -a "x$MANAGER_SEL_MODE" != "xnginx" -a "x$MANAGER_SEL_MODE" != "xenrichment" -a "x$MANAGER_SEL_MODE" != "xcustom" -a "x$MANAGER_SEL_MODE" != "xmiddleManager" -a "x$MANAGER_SEL_MODE" != "xcoreplus" -a "x$MANAGER_SEL_MODE" != "xsamza" ]; then
+                f_set_color red
+                echo "ERROR: mode not valid ($MANAGER_SEL_MODE)!!!!"
+                f_set_color norm
+
+                if [ "x$sys_manager_mode" == "x" ]; then
+                    echo -n "  Press a key to return to the menu "
+                    #read trashme
+                fi
+                return 1
+            fi
+
+            echo -n "Selected Mode: "
+            f_set_color orange
+            echo "$MANAGER_SEL_MODE"
+            f_set_color norm
+
+            if [ "x$sys_manager_mode" == "x" ]; then
+                echo 
+                f_set_color cyan
+                echo -n "INFO: "
+                f_set_color norm
+                echo -n "Would you like to have a debug output? (y/N) "
+                read OPT
+            else 
+                OPT="y"
+            fi
+
+            DEBUG_OUTPUT=0
+            [ "x$OPT" == "xy" -o "x$OPT" == "xY" ] && DEBUG_OUTPUT=1
+
+            TMPDIR="/tmp/dir$RANDOM"
+            rm -rf $TMPDIR
+            mkdir -p $TMPDIR
+
+            [ -f ~/.ssh/known_hosts ] && sed -i "/^${sys_ip_rb_manager} /d" ~/.ssh/known_hosts
+
+            files_scp="/opt/rb/etc/chef/validation.pem $DATABAGKEY /opt/rb/home/redBorder/.chef/trusted_certs/erchef.redborder.cluster.crt /etc/hosts" 
+
+            if [ "x$rb_is_manager" == "x1" ]; then
+                files_scp="$files_scp /etc/keepalived/keepalived.conf /opt/rb/etc/cluster-installed.txt /opt/rb/root/.chef/admin.pem /opt/rb/home/redBorder/.s3cfg"
+            fi 
+            mkdir -p /root/.chef/trusted_certs
+
+            if [ "x$sys_manager_rsa" == "x" ]; then
+              echo
+              f_set_color orange
+              echo -n "INFO: "
+              echo    "You are going to connect via ssh to redBorder@${sys_ip_rb_manager}"
+              echo -n "Press enter to proceed ..."
+              f_set_color norm
+              #read trashme
+            fi
+
+            scp_error=1
+
+            if [ "x$sys_manager_rsa" != "x" ]; then
+              if [ -f $sys_manager_rsa ]; then
+                scp -i $sys_manager_rsa -o StrictHostKeyChecking=no -q redBorder@${sys_ip_rb_manager}:"$files_scp" $TMPDIR;
+              else
+                scp -o StrictHostKeyChecking=no -q redBorder@${sys_ip_rb_manager}:"$files_scp" $TMPDIR;
+              fi
+            else
+              scp -o StrictHostKeyChecking=no -q redBorder@${sys_ip_rb_manager}:"$files_scp" $TMPDIR;
+            fi
+
+            if [ ! -f $TMPDIR/validation.pem ]; then
+                scp_error_msg="Error downloading validation cert file"        
+            elif [ ! -f $TMPDIR/$(basename $DATABAGKEY) ]; then
+                scp_error_msg="Error downloading encrypted data bag file"
+            elif [ ! -f $TMPDIR/erchef.redborder.cluster.crt ]; then
+                scp_error_msg="Error downloading erchef.redborder.cluster.crt file"
+            else
+                if [ "x$rb_is_manager" == "x1" ]; then
+                    if [ -f $TMPDIR/cluster-installed.txt ]; then
+                        if [ ! -f $TMPDIR/admin.pem ]; then
+                            scp_error_msg="Error downloading admin.pem file"
+                        elif [ ! -f $TMPDIR/.s3cfg ]; then
+                            scp_error_msg="Error downloading .s3cfg file"
+                        else
+                            scp_error=0
+                        fi
+                    else
+                        scp_error_msg="The remote manager has not finished configuring the cluster. Please wait"
+                    fi
+                else
+                    scp_error=0
+                fi
+            fi
+
+            if [ $scp_error -eq 0 ]; then
+                # connection ok ... stop all services
+                echo "Stopping services ... Please be patient"
+                service chef-client stop
+                sleep 2
+                PIDCHEF=$(pidof chef-client)
+                [ "x$PIDCHEF" != "x" ] && kill -9 $PIDCHEF
+
+                for i in barnyard2 snortd snmpd watchdog riak-cs stanchion riak chef-solr chef-expander erchef rabbitmq postgresql nginx bookshelf druid_historical druid_broker druid_realtime druid_coordinator kafka zookeeper rb-webui hadoop-datanode hadoop-jobtracker hadoop-namenode hadoop-tasktracker; do
+                    if [ -f /etc/init.d/$i ]; then
+                        service $i status &>/dev/null
+                        if [ $? -eq 0 ]; then 
+                            service $i stop
+                        fi
+                    fi
+                done
+            
+                ifdown lo:0 &>/dev/null
+                ifdown lo:1 &>/dev/null
+ 
+                f_sync_manager_time
+                S3VAR="y"
+
+                #Overwritting hosts until chef-client create it
+                cat >/etc/hosts <<rBEOF
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4 $(hostname)
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6 
+
+# Virtual
+${sys_ip_rb_manager}     virtual.redborder.cluster erchef.redborder.cluster
+
+# S3 names
+rBEOF
+                if [ -f ${TMPDIR}/hosts ]; then
+                    s3names=$(egrep "riak.redborder.cluster| rbookshelf\.| bookshelf\." ${TMPDIR}/hosts | grep -v localhost | sed 's/[^ ]*[ ]*//' | tr '\n' ' ')
+                else
+                    s3names=""
+                fi
+                [ "x$s3names" == "x" ] && s3names="riak.redborder.cluster s3.redborder.cluster redborder.s3.redborder.cluster riak-cs.s3.redborder.cluster rbookshelf.s3.redborder.cluster bookshelf.s3.redborder.cluster"
+
+                echo "${sys_ip_rb_manager}      $s3names" >> /etc/hosts
+
+                if [ "x$rb_is_manager" == "x1" ]; then
+                    echo -n "Checking S3 connectivity: "
+                    rm -f /root/.s3cfg.bak
+                    [ -f /root/.s3cfg ] && mv /root/.s3cfg /root/.s3cfg.bak
+                    mv ${TMPDIR}/.s3cfg /root/.s3cfg
+
+                    grep "^host_base" /root/.s3cfg |grep -q "s3.redborder.cluster$"
+                    if [ $? -eq 0 ]; then
+                        s3cmd ls 2>/dev/null | awk '{print $3}'|grep -q "^s3://"
+                        if [ $? -eq 0 ]; then
+                            e_ok
+                        else
+                            e_fail
+                            echo    "ERROR: s3 looks not accesible and probably the register will not work."
+                            echo -n "Are you sure you want to continue ? (Y/n) "
+                            read -t 10 S3VAR
+                            [ "x$S3VAR" == "x" ] && echo && S3VAR="y"
+                        fi
+                        if [ "x$S3VAR" == "xy" -o "x$S3VAR" == "xY" ]; then
+                            rm -f /root/.s3cfg.bak
+                        elif [ -f /root/.s3cfg.bak ]; then
+                            rm -f /root/.s3cfg
+                            mv /root/.s3cfg.bak /root/.s3cfg
+                        fi              
+                    else
+                        echo -n " (not verified - external s3)"
+                        e_ok
+                    fi
+                fi
+
+                if [ "x$S3VAR" == "xy" -o "x$S3VAR" == "xY" ]; then 
+                    rm -f $CLIENTPEM $VALIDATIONFILE $DATABAGKEY
+                    mv ${TMPDIR}/validation.pem $VALIDATIONFILE
+                    mv ${TMPDIR}/$(basename $DATABAGKEY) $DATABAGKEY
+
+                    # copying valid certs
+                    mkdir -p /root/.chef/trusted_certs/
+                    mkdir -p /opt/rb/home/redBorder/.chef/trusted_certs/
+                    rm -f /root/.chef/trusted_certs/erchef.redborder.cluster.crt /opt/rb/home/redBorder/.chef/trusted_certs/erchef.redborder.cluster.crt
+                    mv ${TMPDIR}/erchef.redborder.cluster.crt /root/.chef/trusted_certs/
+                    cp /root/.chef/trusted_certs/erchef.redborder.cluster.crt /opt/rb/home/redBorder/.chef/trusted_certs/erchef.redborder.cluster.crt
+                    chown -R redBorder:redBorder /opt/rb/home/redBorder/.chef
+
+                    if [ "x$rb_is_manager" == "x1" ]; then
+                        rm -f /opt/rb/root/.chef/admin.pem
+                        mv ${TMPDIR}/admin.pem /opt/rb/root/.chef/admin.pem
+
+                        setfacl -m u:redBorder:r /opt/rb/etc/chef/validation.pem /opt/rb/root/.chef/admin.pem
+
+                        # this is a manager
+                        rm -rf /var/log/hadoop/*
+
+                        #Deleting riak data
+                        [ -f /opt/rb/bin/rb_clean_riak_data.sh ] && /opt/rb/bin/rb_clean_riak_data.sh -af
+
+                        echo -n "Deleting local postgresql data "
+                        rm -rf /var/opt/chef-server/postgresql/data/*
+                        p_ok_fail $?
+                        #Deleting bookshelf data
+                        echo -n "Deleting local bookshelf s3 data "
+                        rm -rf /var/opt/chef-server/bookshelf/data/bookshelf/*
+                        p_ok_fail $?
+
+                        echo -n "Deleting local hadoop data "
+                        rm -rf /var/lib/hadoop/*
+                        rm -rf /var/log/hadoop/*
+                        mkdir -p /var/lib/hadoop/data
+                        chown hadoop:hadoop /var/lib/hadoop/data
+                        p_ok_fail 0
+
+                    else
+                         # deleting rules        
+                        rm -rf /opt/rb/etc/snort/*
+                        rm -rf /var/log/snort/*
+                    fi
+                        
+                    echo "Registering ... (Please wait) "
+
+                    rm -f /opt/rb/var/chef/cache/chef-client-running.pid
+                            
+                    sleep 1
+                    RUBYDIR=$(ls -r -d /usr/local/rvm/rubies/ruby-2.*| grep -v "@global" | head -n 1)
+                    GEMDIR=$(ls -r -d /usr/local/rvm/gems/ruby-2.*| grep -v "@global" | head -n 1)
+                    if [ ! -f /etc/chef/client.rb -a ! -f /etc/chef/client.rb.default ]; then
+                        # Creating default client.rb.default file
+                        cat >/etc/chef/client.rb.default <<EOF
+log_level        :info
+validation_key   "/etc/chef/validation.pem"
+ssl_verify_mode  :verify_none
+validation_client_name "chef-validator"
+client_key       "/etc/chef/client.pem"
+chef_server_url  "https://erchef.redborder.cluster"
+file_cache_path  "/opt/rb/var/chef/cache"
+file_backup_path "/opt/rb/var/chef/backups"
+pid_file         "/var/run/chef/client.pid"
+enable_reporting false
+EOF
+                    fi
+
+                    # Creating /etc/chef/client.rb if proceed
+
+                    if [ -f /etc/chef/client.rb.default ]; then 
+                        rm -f /etc/chef/client.rb
+                        cp /etc/chef/client.rb.default /etc/chef/client.rb
+                    fi
+                    sed -i "s%^chef_server_url.*%chef_server_url  \"https://${sys_ip_rb_manager}\"%" /etc/chef/client.rb
+
+                    if [ ${rb_is_manager} -eq 1 ]; then
+                        cat >/etc/chef/role-manager-once.json <<EOF
+{
+  "run_list": [ "role[manager]" ],
+  "redBorder": {
+    "force-run-once": true
+  }
+}
+EOF
+                    fi
+
+                    if [ ${rb_is_manager} -eq 1 ]; then
+                        rm -rf /tmp/kafka/* /tmp/realtime/* /tmp/druid/* /tmp/zookeeper/* /opt/rb/var/www/rb-rails/log/* /var/log/druid/* /var/log/kafka/* /var/log/nprobe/* /var/log/rb-webui/* /var/log/zookeeper/*
+                        rm -f /opt/rb/etc/cluster.lock
+                        touch /opt/rb/etc/cluster-installed.lock
+                    fi
+
+                    if [ $DEBUG_OUTPUT -eq 1 ]; then
+                        /opt/rb/bin/rb_run_chef_once.sh
+                        /opt/rb/bin/rb_run_chef_once.sh
+                    else 
+                        /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                        /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                    fi
+
+                    step=1
+                    while [ $step -lt 40 ]; do
+                        step=$(( $step + 1 ))
+                        if [ -f $VALIDATIONFILE -a -f $CLIENTPEM -a -f /opt/rb/var/www/rb-rails/config/rb-chef-webui.pem ]; then
+                            if [ "x${rb_is_manager}" == "x0" ]; then
+                                rm -f $VALIDATIONFILE
+                            fi
+                            step=1000
+                            echo
+                            if [ "x${rb_is_manager}" == "x1" ]; then
+                                sys_flag_registered=1
+                                f_set_color green
+                                echo -n "Manager registered successfully with chef server"
+                                f_set_color norm
+                                e_ok
+                            fi
+                        else
+                            sleep 3
+                            if [ $DEBUG_OUTPUT -eq 1 ]; then
+                                /opt/rb/bin/rb_run_chef_once.sh
+                                /opt/rb/bin/rb_run_chef_once.sh
+                            else 
+                                /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                                /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                            fi
+                        fi
+                    done
+
+                    if [ $step != 1000 ]; then
+                        [ $DEBUG_OUTPUT -eq 1 ] && echo -n "Manager NOT registered "
+                        sys_flag_registered=0
+                        e_fail
+                    else
+                        /opt/rb/bin/rb_create_manager_role.rb
+	                #/opt/rb/bin/rb_update_timestamp.rb
+ 
+                        echo -n "Waiting until master (${sys_ip_rb_manager}) is ready ... "
+                        sleep 20
+                        rb_manager_ssh.sh ${sys_ip_rb_manager} "/opt/rb/bin/rb_wakeup_chef" &>/dev/null
+                        sleep 20
+                        e_ok
+
+                        touch /opt/rb/etc/riak_blocked
+                        /opt/rb/bin/rb_set_mode.rb ${MANAGER_SEL_MODE}
+
+                        [ -f /opt/rb/etc/chef/initialdata.json ] && /opt/rb/bin/rb_chef_node /opt/rb/etc/chef/initialdata.json
+
+                        if [ $DEBUG_OUTPUT -eq 1 ]; then
+                            /opt/rb/bin/rb_run_chef_once.sh
+                            /opt/rb/bin/rb_run_chef_once.sh
+                        else 
+                            /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                            /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                        fi
+
+                        echo -n "Waiting until master (${sys_ip_rb_manager}) is ready ... "
+                        sleep 20
+                        rb_manager_ssh.sh ${sys_ip_rb_manager} "/opt/rb/bin/rb_wakeup_chef" &>/dev/null
+                        counter=1
+                        riak_joined=1
+                        sleep 20
+                        e_ok
+                        echo 
+
+                        rm -f /opt/rb/etc/cluster-installed.lock
+
+                        service chef-client start &>/dev/null
+
+                        rm -f /opt/rb/etc/riak_blocked
+
+                        /opt/rb/bin/rb_download_chef_data.sh -y
+                    fi
+
+                    rm -f /opt/rb/etc/cluster-installed.lock
+
+                    chkconfig --add chef-client
+                    service chef-client start
+                fi
+
+                if [ "x$sys_manager_mode" == "x" ]; then
+                    echo
+                    sleep 2
+                    echo -n "Press a key to continue ... "
+                    #read trashme
+                fi
+            else
+                if [ "x$scp_error_msg" != "x" ]; then
+                    echo_fail "$scp_error_msg"
+                else
+                    echo_fail "Unkonwn error!!!"
+                fi
+                if [ "x$sys_manager_mode" == "x" ]; then
+                  sleep 1
+                  echo -n "Press a key to continue ... "
+                  #read trashme
+                fi
+            fi
+            rm -rf $TMPDIR
+
+        elif [ ${rb_is_sensor} -eq 1 ]; then
+            rm -f /opt/rb/etc/sensor_id /opt/rb/etc/chef/role-sensor-once.json /opt/rb/etc/chef/role-sensor.json
+            cp /opt/rb/etc/chef/role-sensor-once.json.default /opt/rb/etc/chef/role-sensor-once.json
+            [ -f ~/.ssh/known_hosts ] && sed -i "/^${sys_ip_rb_manager} /d" ~/.ssh/known_hosts
+            mkdir -p /root/.chef/trusted_certs
+            mkdir -p /opt/rb/home/redBorder/.chef/trusted_certs/
+
+            echo ""
+            echo "Manager: https://${sys_ip_rb_manager}"
+            echo -n "    Username: " 
+            #read username_rb_manager
+            username_rb_manager="admin"
+            echo -n "    Password: " 
+            stty_orig=$(stty -g)
+            stty -echo
+            #read password_rb_manager
+            password_rb_manager="redborder"
+            echo
+            stty ${stty_orig}
+
+            sensorip=$(ip r get ${sys_ip_rb_manager}|grep src|head -n 1 |sed 's/[ ]*$//'|sed 's/.* //')
+
+            if [ "x${username_rb_manager}" != "x" -a "x${password_rb_manager}" != "x" -a "x${sensorip}" != "x" -a "x${sys_ip_rb_manager}" != "x" ]; then
+                if [ "x$sys_manager_mode" == "x" ]; then
+                    echo 
+                    f_set_color cyan
+                    echo -n "INFO: "
+                    f_set_color norm
+                    echo -n "Would you like to have a debug output? (y/N) "
+                    OPT="y"
+                    #read OPT
+                else 
+                    OPT="y"
+                fi
+    
+                DEBUG_OUTPUT=0
+                [ "x$OPT" == "xy" -o "x$OPT" == "xY" ] && DEBUG_OUTPUT=1
+
+                echo
+                echo "Contacting https://${sys_ip_rb_manager} ... "
+                rm -f $CLIENTPEM $VALIDATIONFILE $DATABAGKEY
+
+                /opt/rb/bin/rb_associate_sensor.rb -u "$username_rb_manager" -p "${password_rb_manager}" -i "${sensorip}" -m "${sys_ip_rb_manager}"
+
+                if [ ! -f $CLIENTPEM -o ! -f $DATABAGKEY ]; then
+                    echo -n "ERROR: Cannot join to https://${sys_ip_rb_manager}"
+                    e_fail
+                    echo -n "Press a key to continue ... "
+                    #read trashme
+                else
+                    echo -n "Sensor joined successfully: "
+                    e_ok
+
+                    echo "Stopping services ... Please be patient"
+                    service chef-client stop
+                    sleep 2
+                    PIDCHEF=$(pidof chef-client)
+                    [ "x$PIDCHEF" != "x" ] && kill -9 $PIDCHEF
+
+                    for i in barnyard2 snortd snmpd watchdog; do
+                        if [ -f /etc/init.d/$i ]; then
+                            service $i status &>/dev/null
+                            if [ $? -eq 0 ]; then
+                                service $i stop
+                            fi
+                        fi
+                    done
+
+                    rm -rf /opt/rb/etc/snort/*
+                    rm -rf /opt/rb/etc/sysconfig/snort-* /opt/rb/etc/sysconfig/barnyard2-*
+
+                    f_sync_manager_time
+
+                    chown -R redBorder:redBorder /opt/rb/home/redBorder/.chef
+
+                    rm -rf /opt/rb/etc/snort/*
+                    rm -rf /var/log/snort/*
+
+                    echo "Configuring sensor ... (Please wait) "
+
+                    rm -f /opt/rb/var/chef/cache/chef-client-running.pid
+
+                    sleep 1
+                    RUBYDIR=$(ls -r -d /usr/local/rvm/rubies/ruby-2.*| grep -v "@global" | head -n 1)
+                    GEMDIR=$(ls -r -d /usr/local/rvm/gems/ruby-2.*| grep -v "@global" | head -n 1)
+                    if [ ! -f /etc/chef/client.rb -a ! -f /etc/chef/client.rb.default ]; then
+                        cat >/etc/chef/client.rb.default <<EOF
+log_level        :info
+validation_key   "/etc/chef/validation.pem"
+ssl_verify_mode  :verify_none
+validation_client_name "chef-validator"
+client_key       "/etc/chef/client.pem"
+chef_server_url  "https://erchef.redborder.cluster"
+file_cache_path  "/opt/rb/var/chef/cache"
+file_backup_path "/opt/rb/var/chef/backups"
+pid_file         "/var/run/chef/client.pid"
+enable_reporting false
+EOF
+                    fi
+
+                    if [ -f /etc/chef/client.rb.default ]; then
+                        rm -f /etc/chef/client.rb
+                        cp /etc/chef/client.rb.default /etc/chef/client.rb
+                    fi
+                    sed -i "s%^chef_server_url.*%chef_server_url  \"https://${sys_ip_rb_manager}\"%" /etc/chef/client.rb
+
+                    cat >/etc/hosts <<rBEOF
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4 `hostname` 
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6 
+
+# S3 names
+${sys_ip_rb_manager}     s3.redborder.cluster redborder.s3.redborder.cluster riak-cs.s3.redborder.cluster
+
+# Virtual
+${sys_ip_rb_manager}     virtual.redborder.cluster rbookshelf.s3.redborder.cluster erchef.redborder.cluster
+
+rBEOF
+                    if [ $DEBUG_OUTPUT -eq 1 ]; then
+                        /opt/rb/bin/rb_run_chef_once.sh
+                    else
+                        /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                    fi
+
+                    step=1
+                    SENSOR_ID=0
+                    while [ $step -lt 5 ]; do
+                        [ -f /opt/rb/etc/sensor_id ] && SENSOR_ID=$(head -n 1 /opt/rb/etc/sensor_id |awk '{print $1}') || SENSOR_ID=0
+                        if [ $SENSOR_ID -eq 0 ]; then
+                            if [ $DEBUG_OUTPUT -eq 1 ]; then
+                                /opt/rb/bin/rb_run_chef_once.sh
+                            else
+                                /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                            fi
+                            step=$(( $step + 1 ))
+                            sleep 2
+                        else
+                            step=1000
+                        fi
+                    done
+                    if [ $SENSOR_ID -ne 0 ]; then
+                        f_set_color green
+                        echo -n "Sensor registered successfully with chef server"
+                        f_set_color norm
+                        e_ok
+                        chkconfig --add chef-client
+                        service chef-client start
+                        sys_flag_registered=1
+                    else
+                        f_set_color red
+                        echo -n "Sensor registered with errors!!!"
+                        f_set_color norm
+                        e_fail
+                        chkconfig --del chef-client
+                        sys_flag_registered=0
+                    fi
+
+
+                    if [ "x$sys_manager_mode" == "x" ]; then
+                        echo
+                        sleep 2
+                        echo -n "Press a key to continue ... "
+                        #read trashme
+                    fi
+                fi
+            else
+                echo_fail "Invalid parameters!"
+                sleep 1
+                echo -n "  Press a key to continue ... "
+                #read trashme
+            fi
+        fi
+    fi  
+}
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

@@ -1,0 +1,617 @@
+#!/bin/bash
+
+CLIENTPEM="/etc/chef/client.pem"
+VALIDATIONFILE="/etc/chef/validation.pem"
+DATABAGKEY="/etc/chef/encrypted_data_bag_secret"
+
+f_conf_system() {
+
+    f_sys_init_manager_long
+
+    while [ 1 ]; do
+	f_check_tty
+        [ -z "$DEBUG" ] && clear
+        cat <<EOF
+
+                        redBorder System configuration menu
+
+
+  1) Hostname [${sys_hostname}]
+  2) Set local time
+EOF
+
+        cat <<EOF
+  3) IP address for rB Master Manager [${sys_ip_rb_manager_long}]
+EOF
+        echo -n "  4) Register rB Sensor/Manager ("
+        if [ ${sys_flag_registered} -eq 0 ]; then
+            # sensor or manager not registered
+            f_set_color red
+            echo -n "not registered yet"
+            f_set_color norm
+            echo ")"
+        else
+            # sensor/manager registered
+            f_set_color green
+            echo -n "registered"
+            f_set_color norm
+            echo ")"
+        fi
+
+        echo
+        cat <<EOF
+                                   a) apply
+EOF
+
+        if [ -f /opt/rb/bin/rb_sysconf_clustat ]; then
+            cat <<EOF
+                                   s) show status
+EOF
+        fi
+
+        cat <<EOF
+                                   q) quit
+
+EOF
+        f_sys_notification
+
+        cat <<EOF
+  ----------------------------------------------------------------------------
+EOF
+        f_date
+        echo -n "       Selection: "
+
+        read OPT
+        case $OPT in
+
+            q | Q)  break
+                    ;;
+            1)  f_conf_hostname
+                ;;
+            2)  f_conf_localtime
+                ;;
+            3)  f_conf_rb_manager
+                ;;
+            4)  f_sys_rb_register
+                ;;
+            a | A)  f_sys_apply
+                    ;;
+            s | S)  if [ -f /opt/rb/bin/rb_sysconf_clustat ]; then
+                       echo 
+                       /opt/rb/bin/rb_sysconf_clustat
+                       echo -n "Press a key to continue ... "
+                       read trashme
+                    fi
+                    ;;
+        esac
+    done
+}
+
+
+f_sync_manager_time() {
+
+    /etc/init.d/ntpd status &>/dev/null
+    NTPDSTARTED=$?
+    if [ $NTPDSTARTED -eq 0 ]; then
+        #ntpd is started
+        /etc/init.d/ntpd stop
+    fi
+    echo -n "Synchronizing time with ${sys_ip_rb_manager} ... "
+    ntpdate ${sys_ip_rb_manager} &>/dev/null
+    RET=$?
+    p_ok_fail $RET
+    hwclock --systohc
+    if [ $RET -eq 0 ]; then
+        hwclock --systohc
+    fi
+    sleep 3
+    chkconfig ntpd on
+    chkconfig ntpdate on
+
+    if [ $NTPDSTARTED -eq 0 ]; then
+        /etc/init.d/ntpd start
+    fi
+    sleep 2
+
+}
+
+f_sys_init() {
+    sys_flag_need_apply=${sys_flag_need_apply:-0}
+    sys_flag_manager_unreach=${sys_flag_manager_unreach:-0}
+    sys_flag_need_reset_ccert=${sys_flag_need_reset_ccert:-0}
+    sys_flag_chef_client_stop_error=${sys_flag_chef_client_stop_error:-0}
+
+    rpm --quiet -q redBorder-manager
+    if [ $? -eq 0 ]; then
+        rb_is_manager=1
+        rb_is_sensor=0
+    else
+        rb_is_manager=0
+        rb_is_sensor=1
+        rpm --quiet -q redBorder-mail-sensor
+        if [ $? -eq 0 ]; then
+            rb_is_sensor_gateway=1
+        fi
+    fi
+
+    if [ -f $CLIENTPEM ]; then
+        # registered
+        sys_flag_registered=1
+    else
+        if [ -f $VALIDATIONFILE ]; then
+            # registering
+            sys_flag_registered=0
+        else
+            # unregistered
+            sys_flag_registered=0
+        fi
+    fi
+
+    if [ "x${sys_hostname}" == "x" ]; then
+        # No Hostname configured ... first time
+        sys_hostname=$(cat /etc/sysconfig/network | grep HOSTNAME |awk '{print $2}')
+        if [ "x${sys_hostname}" == "x" ]; then
+            sys_hostname=${sys_hostname:-$(hostname)}
+        fi
+    fi
+
+    # sys_ip_rb_manager always loads from client.rb
+    sys_ip_rb_manager_failed=""
+    if [ -f /etc/chef/client.rb ]; then
+        cat /etc/chef/client.rb | grep chef_server_url | awk '{print $2}' | grep -q '"https://[[:alnum:].-]*"'
+        if [ $? -eq 0 ]; then
+            sys_ip_rb_manager=$(cat /etc/chef/client.rb | grep chef_server_url | sed 's%^.*"https://\(.*\)"$%\1%' | head -n 1)
+        else
+            sys_ip_rb_manager="127.0.0.1"
+        fi
+    else
+        sys_ip_rb_manager="127.0.0.1"
+    fi
+    f_sys_init_manager_long
+}
+
+f_sys_init_manager_long() {
+    sys_ip_rb_manager_long="${sys_ip_rb_manager}"
+    if [ "x$sys_ip_rb_manager" == "xerchef.redborder.cluster" ]; then
+        tmpvar=$(grep " erchef.redborder.cluster" /etc/hosts|awk '{print $1}'|head -n 1)
+        if [ "x$tmpvar" != "x" ]; then 
+            sys_ip_rb_manager_long="${sys_ip_rb_manager_long} - $tmpvar"
+            sys_ip_rb_manager="$tmpvar"
+        fi
+    fi
+}
+
+f_sys_notification() {
+
+    if [ -f $VALIDATIONFILE -a ! -f $CLIENTPEM ]; then
+        /etc/init.d/chef-client status &>/dev/null
+        if [ $? -eq 0 ]; then
+            f_set_color red
+            echo "  Can not associate with the master manager. Please check the logs ... "
+            f_set_color orange
+            echo "  Does it exist another sensor/manager with the same short hostname (`hostname`)?"
+            f_set_color norm
+        fi
+    fi
+
+    if [ ${sys_flag_registered} -eq 0 ]; then
+        f_set_color orange
+        if [ "x${rb_is_manager}" == "x1" ]; then 
+            echo "  This manager is not registered at any cluster"
+        else
+            echo "  This sensor is not registered yet"
+        fi
+        f_set_color norm
+    fi
+    if [ ${sys_flag_chef_client_stop_error} -eq 1 ]; then
+        f_set_color red
+        echo "  Chef client service has been stopped with errors"
+        f_set_color norm
+    fi
+    if [ $sys_flag_need_apply -eq 1 ]; then
+        f_set_color orange
+        echo "  Select option 'a' to apply changes"
+        f_set_color norm
+    fi
+    if [ $sys_flag_need_reset_ccert -eq 1 ]; then
+        if [ ${rb_is_sensor} -eq 1 -a ${sys_flag_registered} -eq 1 ]; then 
+            f_set_color orange
+            echo "  The 'sensor' will have to be registered again"
+            f_set_color norm
+        fi          
+    fi
+    if [ $sys_flag_manager_unreach -eq 1 ]; then
+        f_set_color orange
+        echo "  The master manager (${sys_ip_rb_manager_failed}) is not reachable!"
+        f_set_color norm
+    fi
+    
+    if [ ${rb_is_manager} -eq 1 -a ! -f /opt/rb/etc/cluster-installed.txt -a -d /sys/class/net/bond0 -a ! -f /opt/rb/etc/cluster.lock ]; then
+        f_set_color orange
+        echo "  The manager is finishing the initial system configuration. Please wait ..."
+        f_set_color norm
+    fi
+}
+
+f_conf_rb_manager() {
+
+    local ret=0
+    local ip_rb_manager_tmp
+    echo 
+    echo -n "Insert IP address or Domain name: "
+    #read OPT
+    OPT=`cat /opt/rb/bin/IP-manager`
+    if [ -n "$OPT" ]; then
+        ret=1
+        f_ipok $OPT
+        # check ip
+        if [ $? -eq 0 ]; then
+            ret=0
+        else
+            # check domain
+            echo "$OPT" | egrep  -q "^[[:alnum:]]+[[:alnum:].]+[[:alnum:]]$"
+            [ $? -eq 0 ] && ret=0
+        fi
+    
+        if [ $ret -eq 0 ]; then
+            if [ "x${sys_ip_rb_manager}" != "x${OPT}" ]; then
+                ip_rb_manager_tmp="$(echo $OPT |head -n 1)"
+                echo -n "Are you sure (Y/n)? "
+                #read OPT
+                OPT="y"
+                if [ "x${OPT}" == "xn" -o "x${OPT}" == "xN" ]; then
+                    echo_fail "IP or Domain name unchanged!"
+                    ret=0
+                else
+                    echo -n "Checking if it is reacheable, please wait ... "
+                    wget -q --no-check-certificate --timeout=5 --tries=1 -O /dev/null https://${ip_rb_manager_tmp} &>/dev/null
+                    if [ $? -ne 0 -a $? -ne 6 -a $? -ne 5 ]; then
+                        sys_flag_manager_unreach=1
+                        sys_ip_rb_manager_failed=${ip_rb_manager_tmp}
+                        echo_warn "Warning: The manager is not reachable (https://${sys_ip_rb_manager_failed})!"
+                    else
+                        e_ok
+                        sys_ip_rb_manager=${ip_rb_manager_tmp}
+                        f_sys_init_manager_long
+                        sys_flag_need_reset_ccert=1
+                        sys_flag_need_apply=1
+                        sys_flag_manager_unreach=0
+                        sys_flag_registered=0
+                        #f_sync_manager_time
+                        f_sys_apply
+                    fi
+                fi
+            else
+                echo_fail "IP or Domain name unchanged!"
+                ret=0
+            fi
+        else
+            echo_fail "IP or Domain name $OPT is not valid!"
+            ret=1
+        fi
+    fi
+
+    return ${ret}
+}
+
+f_conf_hostname() {
+
+    local ret=0
+    echo
+    echo -n "Insert Hostname [$(hostname)]: "
+    #read OPT
+    OPT="sensorIPS"
+    if [ -n "$OPT" ]; then
+        echo "$OPT" | egrep  -q "^[[:alnum:]]+[[:alnum:].]+[[:alnum:]]$"
+        if [ $? -eq 0 ]; then
+            if [ "x${sys_hostname}" != "x${OPT}" ]; then
+                sys_hostname=$OPT
+                echo -n "Are you sure (Y/n)? "
+                #read OPT
+                OPT="Y"
+                if [ "x$OPT" == "xn" -o  "x$OPT" == "xN" ]; then
+                    # do not apply ... returning
+                    echo_fail "Hostname unchanged!"
+                    ret=0
+                else
+                    sys_flag_need_apply=1
+                    [ ${sys_flag_registered} -eq 1 ] && sys_flag_need_reset_ccert=1
+
+                    if [ ${rb_is_sensor} -eq 1 ]; then
+                        sys_ip_rb_manager="127.0.0.1"
+                        f_sys_init_manager_long
+                    fi
+
+                    f_sys_apply
+                    ret=0
+                fi
+            else
+                echo_fail "Hostname unchanged!"
+                ret=0
+            fi          
+        else
+            echo_fail "Hostname $OPT is not valid!"
+            ret=1
+        fi
+    fi
+
+    return ${ret}
+}
+
+f_conf_localtime() {
+
+    local DATE TIME HOUR MINUTE YEAR MONTH DAY
+    echo
+    if  [ "x$sys_ip_rb_manager" != "x" ]; then
+        echo -n "  UTC time [HH:mm] or [YYYY/MM/DD] or [YYYY/MM/DD HH:mm]: "
+    else
+        echo -n "  Local time [HH:mm] or [YYYY/MM/DD] or [YYYY/MM/DD HH:mm]: "
+    fi
+    read OPT
+    f_time_ok "$OPT"
+    if [ $? -eq 0 ]; then
+        f_time_set "$OPT"
+    fi
+}
+
+f_sys_apply() {
+    waituser=1
+    start_chef=1
+    update_chef_information=1
+    ignore_cher=0
+    [ "x$1" != "x" ] && waituser=$1
+    [ "x$2" != "x" ] && start_chef=$2
+    [ "x$3" != "x" ] && update_chef_information=$3
+
+    if [ "x${sys_hostname}" == "xrbsensor" ]; then
+        echo_warn "The hostname cannot be rbsensor (default name)"
+    elif [ "x${rb_is_sensor}" == "x1" -a "x${sys_hostname}" == "xrbmanager" ]; then
+        echo_warn "The hostname cannot be rbmanager (Manager Name)"
+    elif [ "x${sys_hostname}" == "xrb-stand-alone" ]; then
+        echo_warn "The hostname cannot be rb-stand-alone (Standalone Name)"
+    elif [ "x${sys_hostname}" == "xrb-chef-webui" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xroot" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xchef-webui" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xchef-validator" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xrb-stronghold" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xsensor" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xips-sensor" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xflow-sensor" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xall" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xerchef" -o "x${sys_hostname}" == "xriak" -o "x${sys_hostname}" == "x" -o "x${sys_hostname}" == "xpostgresql" -o "x${sys_hostname}" == "xkafka" -o "x${sys_hostname}" == "xrb-webui" -o "x${sys_hostname}" == "xrepo" -o "x${sys_hostname}" == "xnprobe" -o "x${sys_hostname}" == "xtrap2kafka" -o "x${sys_hostname}" == "xn2klocd" -o "x${sys_hostname}" == "xn2kmobiled" -o "x${sys_hostname}" == "xrbookshelf" -o "x${sys_hostname}" == "xhadoop_namenode" -o "x${sys_hostname}" == "xhadoop_resourcemanager" -o "x${sys_hostname}" == "xhadoop_historyserver" -o "x${sys_hostname}" == "xfreeradius" -o "x${sys_hostname}" == "xstorm_nimbus" -o "x${sys_hostname}" == "xstormnimbus" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    elif [ "x${sys_hostname}" == "xlocahost" -o "x${sys_hostname}" == "xlocahost4" -o "x${sys_hostname}" == "xlocahost6" ]; then
+        echo_warn "The hostname cannot be ${sys_hostname}"
+    else    
+        if [ ${rb_is_manager} -eq 0 ]; then
+            sys_flag_need_apply=0
+            # this is a sensor (not a manager)
+            if [ "x$last_hostname" != "x${sys_hostname}" ]; then
+                f_save
+                echo "Changing hostname. Please be patient ..."
+                hostname ${sys_hostname}
+                sed -i "s/^HOSTNAME=.*/HOSTNAME=${sys_hostname}/" /etc/sysconfig/network
+            fi
+
+            if [ "x${sys_ip_rb_manager}" != "x" -a "x${sys_ip_rb_manager}" != "x127.0.0.1" -a ${sys_flag_need_reset_ccert} -eq 1 ]; then           
+                [ ! -f /etc/chef/client.rb -a -f /etc/chef/client.rb.default ] && cp /etc/chef/client.rb.default /etc/chef/client.rb            
+                rm -f /opt/rb/etc/sensor_id /opt/rb/etc/chef/role-sensor-once.json /opt/rb/etc/chef/role-sensor.json
+                cp /opt/rb/etc/chef/role-sensor-once.json.default /opt/rb/etc/chef/role-sensor-once.json
+
+                [ "x${rb_is_sensor}" == "x1" -a "x${rb_is_manager}" == "x0" ] && sed -i "s%^chef_server_url.*%chef_server_url  \"https://erchef.redborder.cluster\"%" /etc/chef/client.rb
+
+                cat >/etc/hosts <<EOF
+127.0.0.1   `hostname 2>/dev/null` `hostname -s 2>/dev/null` localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         `hostname 2>/dev/null` `hostname -s 2>/dev/null` localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+${sys_ip_rb_manager} erchef.redborder.cluster
+
+EOF
+                f_sync_manager_time
+
+                sys_flag_need_reset_ccert=0
+                /etc/init.d/chef-client status &>/dev/null
+                if [ $? -ne 3 ]; then 
+                    /etc/init.d/chef-client stop
+                    if [ $? -ne 0 ]; then
+                        sys_flag_chef_client_stop_error=1
+                    fi
+                fi
+                rm -f $CLIENTPEM $VALIDATIONFILE
+            fi
+
+            sys_flag_registered=0
+            service rsyslog restart
+            if [ $waituser -eq 1 ]; then
+                echo -n "Press a key to continue ... "
+                #read trashme
+            else
+                sleep 2
+            fi
+        else
+            # this is a manager
+            if [ ! -f /opt/rb/etc/cluster-installed.txt -a -d /sys/class/net/bond0 -a ! -f /opt/rb/etc/cluster.lock -a $update_chef_information -eq 1 ]; then 
+                echo
+                echo "  The manager is still configuring the system services."
+                echo "  Please wait until the system is configured completly"
+                echo "  INFO: The entire configuration system may take several minutes"
+                echo
+            else
+                sys_flag_need_apply=0
+                last_hostname=`hostname`
+ 
+                if [ "x$last_hostname" != "x${sys_hostname}" ]; then
+                    if [ -f /opt/rb/var/www/rb-rails/config/rb-chef-webui.pem -a -f /usr/sbin/riak ]; then
+                        manager_mode=$(/opt/rb/bin/rb_get_mode.rb 2>/dev/null)
+                        if [ -f /opt/rb/etc/mode/riak -a -f /opt/rb/etc/cluster-installed.txt ]; then
+                            riak_mode=`</opt/rb/etc/mode/riak`
+                            source /opt/rb/etc/manager.conf
+                            if [ "x$riak_mode" == "xenabled" -a "x$RIAK_JOINED" == "x1" ]; then
+                                riak_mode="enabled"
+                            else
+                                riak_mode="disabled"
+                            fi
+                        elif [ ! -f /opt/rb/etc/cluster-installed.txt ]; then
+                            riak_mode="enabled"
+                        else
+                            riak_mode="disabled"
+                        fi
+                    else
+                        manager_mode=""
+                        riak_mode="disabled"
+                    fi
+
+                    echo ""
+                    echo "Changing hostname. Please wait ... "
+
+                    if [ $update_chef_information -eq 1 ]; then
+                        env HOME="/root" EDITOR="vim" knife client list &>/dev/null
+                        varret=$?
+                    else
+                        varret=0
+                    fi
+                    
+                    if [ $varret -eq 0 ]; then
+                        if [ $update_chef_information -eq 1 ]; then
+                            env HOME="/root" EDITOR="vim" knife client list | sed 's/^[ ]*//' | sed 's/[ ]*$//' | grep -q "^${sys_hostname}$"
+                            varret=$?
+                        else
+                            varret=1
+                        fi
+                        if [ $varret -eq 0 ]; then
+                            sys_flag_need_apply=1
+                            f_set_color red
+                            echo "  The specified hostname already exist at the chef cloud. Please choose other one or remove the client in chef"
+                            f_set_color norm
+                        else                
+                            if [ $update_chef_information -eq 1 ]; then
+                                env HOME="/root" EDITOR="vim" knife client -c $RBDIR/root/.chef/knife.rb --disable-editing create ${sys_hostname} > $RBDIR/etc/chef/client.pem
+                                env HOME="/root" EDITOR="vim" knife node -c $RBDIR/root/.chef/knife.rb --disable-editing create ${sys_hostname}
+                                env HOME="/root" EDITOR="vim" knife node -c $RBDIR/root/.chef/knife.rb run_list add ${sys_hostname} "role[manager]"
+                                env HOME="/root" EDITOR="vim" knife role -c $RBDIR/root/.chef/knife.rb --disable-editing create ${sys_hostname}
+                                
+                                RET=$?
+                            else
+                                RET=0
+                            fi
+
+                            if [ $RET -eq 0 ]; then
+                                f_save
+                                rb_service stop chef-client watchdog druid kafka zookeeper
+
+                                [ $update_chef_information -eq 1 -a "x$manager_mode" == "xmaster" -a -f /opt/rb/bin/rb_set_mode.rb ] && /opt/rb/bin/rb_set_mode.rb slave
+                                
+				# Deleting data reference the hostname
+                                rm -rf /var/log/hadoop/*
+                                rm -rf /var/log/remote/*-127.0.0.1.log
+
+                                hostname ${sys_hostname}
+                                sed -i "s/^HOSTNAME=.*/HOSTNAME=${sys_hostname}/" /etc/sysconfig/network
+                                rm -rf /var/log/rabbitmq/*
+                                rm -rf /var/lib/rabbitmq/*
+
+                                sed -i "s/.* ${last_hostname} /127.0.0.1     ${last_hostname} /" /etc/hosts 
+
+                                grep -q " ${sys_hostname} " /etc/hosts
+                                if [ $? -ne 0 ]; then
+                                    cat >>/etc/hosts <<EOF
+127.0.0.1   ${sys_hostname}
+EOF
+                                fi
+
+                                if [ -f /opt/rb/etc/master.lock -o -f /opt/rb/etc/cluster-installed.txt ]; then 
+                                    if [ $update_chef_information -eq 1 ]; then
+                                        HOME="/root" EDITOR="vim" knife client delete "${last_hostname}" -y
+                                        if [ $? -eq 0 ]; then
+                                            HOME="/root" EDITOR="vim" knife node delete "${last_hostname}" -y 
+                                            HOME="/root" EDITOR="vim" knife role delete "${last_hostname}" -y 
+                                            sleep 1
+                                            /opt/rb/bin/rb_create_manager_role.rb
+                                            env HOME="/root" EDITOR="vim" knife node -c $RBDIR/root/.chef/knife.rb run_list add ${sys_hostname} "role[${sys_hostname}]"
+                                            [ -f /opt/rb/bin/rb_riak_status.rb ] && /opt/rb/bin/rb_riak_status.rb ${riak_mode}
+                                            [ "x$manager_mode" != "x" -a -f /opt/rb/bin/rb_set_mode.rb ] && /opt/rb/bin/rb_set_mode.rb $manager_mode
+ 	   	                            /opt/rb/bin/rb_update_timestamp.rb &>/dev/null
+
+                                            #/opt/rb/bin/rb_download_chef_data.sh -y
+                                            service rsyslog status &>/dev/null
+                                            [ $? -eq 3 ] && service rsyslog stop
+                                            service rsyslog start
+
+                                            f_set_color green
+                                            echo "The hostname has been changed successfully"
+                                            f_set_color norm
+
+                                            cat >/etc/chef/role-manager.json <<EOF
+{
+  "run_list": [ "role[manager]" , "role[${sys_hostname}]" ],
+  "redBorder": {
+    "force-run-once": false
+  }
+}
+EOF
+                                        cat >/etc/chef/role-manager-once.json <<EOF
+{
+  "run_list": [ "role[manager]" , "role[${sys_hostname}]" ],
+  "redBorder": {
+    "force-run-once": true
+  }
+}
+EOF
+                                        fi
+                                    else
+                                        cat >/etc/chef/role-manager.json <<EOF
+{
+  "run_list": [ "role[manager]" ],
+  "redBorder": {
+    "force-run-once": false
+  }
+}
+EOF
+                                        cat >/etc/chef/role-manager-once.json <<EOF
+{
+  "run_list": [ "role[manager]" ],
+  "redBorder": {
+    "force-run-once": true
+  }
+}
+EOF
+                                    fi
+                                fi
+ 
+                                if [ $start_chef -eq 1 ]; then
+                                    /etc/init.d/chef-client start
+                                    sleep 5
+                                    /opt/rb/bin/rb_wakeup_chef
+                                fi
+                            else
+                                f_set_color red
+                                echo "  Cannot create ${sys_hostname} chef client!!!"
+                                f_set_color norm
+                                sys_flag_need_apply=1
+                            fi
+                        fi
+                    else
+                        sys_flag_need_apply=1
+                    fi
+                fi
+            fi
+            if [ $waituser -eq 1 ]; then
+                echo -n "Press a key to continue ... "
+                read trashme
+            else
+                sleep 2
+            fi
+        fi
+    fi
+}
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

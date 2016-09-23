@@ -1,0 +1,265 @@
+#!/bin/bash
+
+f_select_manager_mode() {
+    MANAGER_SEL_MODE="master"
+}
+
+f_sys_rb_register() {
+    [ "x$1" != "x" ] && sys_ip_rb_manager="$(echo $1| head -n 1)"
+    [ "x$2" != "x" ] && sys_manager_mode="$2"
+    OPT="n"
+    if  [ "x$sys_ip_rb_manager" != "x" ]; then
+        if [ $sys_flag_need_apply -eq 0 ]; then
+            OPT="y"
+            if [ -f $CLIENTPEM ]; then
+                if [ "x$sys_manager_mode" == "x" ]; then
+                    echo
+                    f_set_color blue
+                    echo -n "  INFO: "
+                    f_set_color norm
+                    echo "The actual profile will be deleted."
+                    echo  -n "  Are you sure you want to continue? (y/N): "
+                    read OPT
+                else
+                    OPT="y"
+                fi
+            fi
+        else
+            echo_warn "There are changes that need to be applied before"
+        fi
+    else
+        echo_warn "You must apply with a valid manager"
+    fi
+
+    if [ "x$OPT" == "xy" -o "x$OPT" == "xY" ]; then
+        DEBUG_OUTPUT=0
+
+        [ ! -f /etc/chef/client.rb -a -f /etc/chef/client.rb.default ] && cp /etc/chef/client.rb.default /etc/chef/client.rb            
+
+        if [ ${rb_is_manager} -eq 1 ]; then
+            f_set_color red
+            echo
+            echo "  The community version cannot create clusters"
+            f_set_color norm
+            read trashme
+            return 
+        elif [ ${rb_is_sensor} -eq 1 ]; then
+            rm -f /opt/rb/etc/sensor_id /opt/rb/etc/chef/role-sensor-once.json /opt/rb/etc/chef/role-sensor.json
+            cp /opt/rb/etc/chef/role-sensor-once.json.default /opt/rb/etc/chef/role-sensor-once.json
+            [ -f ~/.ssh/known_hosts ] && sed -i "/^${sys_ip_rb_manager} /d" ~/.ssh/known_hosts
+            mkdir -p /root/.chef/trusted_certs
+            mkdir -p /opt/rb/home/redBorder/.chef/trusted_certs/
+
+            echo ""
+            echo "Manager: https://${sys_ip_rb_manager}"
+            echo -n "    Username: " 
+            read username_rb_manager
+            echo -n "    Password: " 
+            stty_orig=$(stty -g)
+            stty -echo
+            read password_rb_manager
+            echo
+            stty ${stty_orig}
+
+            sensorip=$(ip r get ${sys_ip_rb_manager}|grep src|head -n 1 |sed 's/[ ]*$//'|sed 's/.* //')
+
+            if [ "x${username_rb_manager}" != "x" -a "x${password_rb_manager}" != "x" -a "x${sensorip}" != "x" -a "x${sys_ip_rb_manager}" != "x" ]; then
+                if [ "x$sys_manager_mode" == "x" ]; then
+                    echo 
+                    f_set_color cyan
+                    echo -n "INFO: "
+                    f_set_color norm
+                    echo -n "Would you like to have a debug output? (y/N) "
+                    read OPT
+                else 
+                    OPT="y"
+                fi
+    
+                DEBUG_OUTPUT=0
+                [ "x$OPT" == "xy" -o "x$OPT" == "xY" ] && DEBUG_OUTPUT=1
+
+                echo
+                echo "Contacting https://${sys_ip_rb_manager} ... "
+                rm -f $CLIENTPEM $VALIDATIONFILE $DATABAGKEY
+
+                /opt/rb/bin/rb_associate_sensor.rb -u "$username_rb_manager" -p "${password_rb_manager}" -i "${sensorip}" -m "${sys_ip_rb_manager}"
+
+                [ -f /opt/rb/etc/cdomain ] && cdomain=$(head -n 1 /opt/rb/etc/cdomain | tr '\n' ' ' | awk '{print $1}') 
+                [ "x$cdomain" == "x" ] && cdomain="redborder.cluster"
+
+                if [ ! -f $CLIENTPEM -o ! -f $DATABAGKEY ]; then
+                    echo -n "ERROR: Cannot join to https://${sys_ip_rb_manager}"
+                    e_fail
+                    echo -n "Press a key to continue ... "
+                    read trashme
+                else
+                    echo -n "Sensor joined successfully: "
+                    e_ok
+
+                    echo "Stopping services ... Please be patient"
+                    service chef-client stop
+                    sleep 2
+                    PIDCHEF=$(pidof chef-client)
+                    [ "x$PIDCHEF" != "x" ] && kill -9 $PIDCHEF
+
+                    for i in barnyard2 snortd snmpd watchdog; do
+                        if [ -f /etc/init.d/$i ]; then
+                            service $i status &>/dev/null
+                            if [ $? -eq 0 ]; then
+                                service $i stop
+                            fi
+                        fi
+                    done
+
+                    rm -rf /opt/rb/etc/snort/*
+                    rm -rf /opt/rb/etc/sysconfig/snort-* /opt/rb/etc/sysconfig/barnyard2-*
+
+                    f_sync_manager_time
+
+                    chown -R redBorder:redBorder /opt/rb/home/redBorder/.chef
+
+                    rm -rf /opt/rb/etc/snort/*
+                    rm -rf /var/log/snort/*
+
+                    echo "Configuring sensor ... (Please wait) "
+
+                    rm -f /opt/rb/var/chef/cache/chef-client-running.pid
+
+                    sleep 1
+                    RUBYDIR=$(ls -r -d /usr/local/rvm/rubies/ruby-2.*| grep -v "@global" | head -n 1)
+                    GEMDIR=$(ls -r -d /usr/local/rvm/gems/ruby-2.*| grep -v "@global" | head -n 1)
+                    if [ ! -f /etc/chef/client.rb -a ! -f /etc/chef/client.rb.default ]; then
+                        cat >/etc/chef/client.rb.default <<EOF
+log_level        :info
+validation_key   "/etc/chef/validation.pem"
+ssl_verify_mode  :verify_none
+validation_client_name "chef-validator"
+client_key       "/etc/chef/client.pem"
+chef_server_url  "https://erchef.${cdomain}"
+file_cache_path  "/opt/rb/var/chef/cache"
+file_backup_path "/opt/rb/var/chef/backups"
+pid_file         "/var/run/chef/client.pid"
+enable_reporting false
+EOF
+                    fi
+
+                    if [ -f /etc/chef/client.rb.default ]; then
+                        rm -f /etc/chef/client.rb
+                        cp /etc/chef/client.rb.default /etc/chef/client.rb
+                    fi
+                    sed -i "s%^chef_server_url.*%chef_server_url  \"https://${sys_ip_rb_manager}\"%" /etc/chef/client.rb
+
+                    cat >/etc/hosts <<rBEOF
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4 `hostname` 
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6 
+
+# S3 names
+${sys_ip_rb_manager}     s3.${cdomain} redborder.s3.${cdomain} riak-cs.s3.${cdomain}
+
+# Virtual
+${sys_ip_rb_manager}     virtual.${cdomain} rbookshelf.s3.${cdomain} erchef.${cdomain}
+
+rBEOF
+                    if [ $DEBUG_OUTPUT -eq 1 ]; then
+                        /opt/rb/bin/rb_run_chef_once.sh
+                    else
+                        /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                    fi
+
+                    step=1
+                    SENSOR_ID=0
+                    while [ $step -lt 5 ]; do
+                        [ -f /opt/rb/etc/sensor_id ] && SENSOR_ID=$(head -n 1 /opt/rb/etc/sensor_id |awk '{print $1}') || SENSOR_ID=0
+                        if [ $SENSOR_ID -eq 0 ]; then
+                            if [ $DEBUG_OUTPUT -eq 1 ]; then
+                                /opt/rb/bin/rb_run_chef_once.sh
+                            else
+                                /opt/rb/bin/rb_run_chef_once.sh &>/dev/null
+                            fi
+                            step=$(( $step + 1 ))
+                            sleep 2
+                        else
+                            step=1000
+                        fi
+                    done
+                    if [ $SENSOR_ID -ne 0 ]; then
+                        f_set_color green
+                        echo -n "Sensor registered successfully with chef server"
+                        f_set_color norm
+                        e_ok
+                        chkconfig --add chef-client
+                        service chef-client start
+                        sys_flag_registered=1
+                    else
+                        f_set_color red
+                        echo -n "Sensor registered with errors!!!"
+                        f_set_color norm
+                        e_fail
+                        chkconfig --del chef-client
+                        sys_flag_registered=0
+                    fi
+
+
+                    if [ "x$sys_manager_mode" == "x" ]; then
+                        echo
+                        sleep 2
+                        echo -n "Press a key to continue ... "
+                        read trashme
+                    fi
+                fi
+            else
+                echo_fail "Invalid parameters!"
+                sleep 1
+                echo -n "  Press a key to continue ... "
+                read trashme
+            fi
+        fi    
+    fi  
+}
+
+f_sys_rb_register_live(){
+
+  echo ""
+  [ -f /opt/rb/etc/rb-uuid ] && uuid=`cat /opt/rb/etc/rb-uuid`
+
+  /etc/init.d/rb-register status &> /dev/null
+  if [ "x$?" == "x0" ]; then
+    echo "This sensor is currently registered in redBorder live with UUID $uuid"
+    echo ""
+    echo -n "Do you want to regenerate a new UUID? (y/N): "
+    read trashme
+    if [ "x$trashme" == "xy" -o "x$trashme" == "xY" ]; then
+      echo ""
+      /opt/rb/bin/rb_disassociate_sensor.sh -f
+      uuid=`cat /opt/rb/etc/rb-uuid`
+      echo ""
+      echo "Sensor UUID: $uuid"
+    fi
+  else
+    echo "Registering sensor to redBorder live. Please wait..." 
+    /opt/rb/bin/rb_disassociate_sensor.sh -f &> /dev/null
+    /etc/init.d/rb-register start &> /dev/null
+    if [ "x$?" == "x0" ]; then
+      echo ""
+      uuid=`cat /opt/rb/etc/rb-uuid`
+      echo -n "Sensor registered to redBorder live successfully"
+      e_ok
+      echo ""
+      echo "Sensor UUID: $uuid"
+      chkconfig --add rb-register
+    else
+      echo ""
+      f_set_color red
+      echo -n "Sensor registered to redBorder live with errors!!!"
+      f_set_color norm
+      e_fail
+      chkconfig --del rb-register
+    fi
+  fi
+
+  echo ""
+  echo -n "Press a key to continue ... "
+  read trashme
+}
+
+## vim:ts=4:sw=4:expandtab:ai:nowrap:formatoptions=croqln:

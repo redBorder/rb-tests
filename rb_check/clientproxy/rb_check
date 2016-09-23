@@ -1,0 +1,455 @@
+#!/bin/bash
+
+source /etc/profile
+#source /opt/rb/bin/rb_manager_functions.sh
+#source /opt/rb/etc/manager.conf
+
+EXITRET=0
+RES_COL=120
+MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+rmfile=0
+output_file=""
+colors=1
+quiet=0
+extended=0
+waitfinish=0
+
+LOCKFILE="/tmp/rb_check.lock"
+function f_trap_exit() {
+    rm -f $LOCKFILE
+    [ $rmfile -eq 1 -a "x$output_file" != "x" ] && rm -f $output_file
+    exit $EXITRET
+}
+
+function usage(){
+  echo "$0 [-s <service_name>][-h][-o <output_file>][-c][-q][-e]"
+  echo "  * -s <service_name> : show only information about this service name"
+  echo "  * -o <output_file>  : stdout to this file instead of stdout"
+  echo "  * -c                : do not use colors"
+  echo "  * -e                : show extende cluster information"
+  echo "  * -w                : wait until other instance finish if it exists"
+  echo "  * -q                : be quiet"
+  exit 0
+}
+
+s=""
+
+while getopts "s:ho:cq:ew" name; do
+  case $name in
+    s) s=$OPTARG;;
+    o) output_file=$OPTARG;;
+    c) colors=0;;
+    q) quiet=1;;
+    e) extended=1;;
+    w) waitfinish=1;;
+    h) usage;;
+  esac
+done
+
+function check_rb_check_process() {
+  if [ -f $LOCKFILE ]; then
+    creatorpid=$(head -n 1 $LOCKFILE)
+    if [ "x$creatorpid" != "x" -a -f /proc/$creatorpid/cmdline ]; then
+      strings /proc/$creatorpid/cmdline |grep -q rb_check
+      if [ $? -eq 0 ]; then
+        [ $quiet -eq 0 ] && echo "INFO: this rb_check is locked ($LOCKFILE - pid: $creatorpid)"
+        return 255
+      fi
+    fi
+  fi
+  return 0
+}
+
+check_rb_check_process
+CHECK_PROCESS=$?
+COUNTER=1
+while [ $CHECK_PROCESS -ne 0 ] ; do
+  if [ $waitfinish -eq 1 -a $COUNTER -le 30 ] ; then
+    echo "Waiting 10 seconds for rb_check to be unlocked... ($COUNTER/30)"
+    let COUNTER=COUNTER+1    
+    sleep 10
+    check_rb_check_process
+    CHECK_PROCESS=$?
+  else 
+    exit 255
+  fi
+done 
+
+trap 'f_trap_exit' 0 15
+
+echo $$ > $LOCKFILE
+
+function e_title() {
+  set_color cyan
+  echo "######################################################################################################"
+  echo -n "#  "
+  set_color blue
+  echo "$*"
+  set_color cyan
+  echo "######################################################################################################"
+  set_color norm
+}
+
+function set_color() {
+  if [ "x$BOOTUP" != "xnone" -a $colors -eq 1 ]; then
+    green="echo -en \\033[1;32m"
+    red="echo -en \\033[1;31m"
+    yellow="echo -en \\033[1;33m"
+    orange="echo -en \\033[0;33m"
+    blue="echo -en \\033[1;34m"
+    black="echo -en \\033[1;30m"
+    white="echo -en \\033[255m"
+    cyan="echo -en \\033[0;36m"
+    purple="echo -en \\033[0;35m"
+    browm="echo -en \\033[0;33m"
+    gray="echo -en \\033[0;37m"
+    norm="echo -en \\033[1;0m"
+    eval \$$1
+  fi
+}
+
+function e_ok() {
+  if [ $colors -eq 0 ]; then
+    echo -n "      "
+  else
+    $MOVE_TO_COL
+  fi
+  echo -n "["
+  set_color green
+  echo -n $"  OK  "
+  set_color norm
+  echo -n "]"
+  echo -ne "\r"
+  echo
+  return 0
+}
+
+function e_fail() {
+  EXITRET=1
+  if [ $colors -eq 0 ]; then
+    echo -n "      "
+  else
+    $MOVE_TO_COL
+  fi
+  echo -n "["
+  set_color red
+  echo -n $"FAILED"
+  set_color norm
+  echo -n "]"
+  echo -ne "\r"
+  echo
+  return 1
+}
+
+function print_result_output(){
+  local ret=1
+  if [ "x$*" == "x" ]; then
+    e_fail
+  else
+    ret=0
+    e_ok
+  fi
+  return $ret
+}
+
+function print_result_output_opposite(){
+  local ret=1
+  if [ "x$*" == "x" ]; then
+    ret=0
+    e_ok
+  else
+    e_fail
+  fi
+  return $ret
+}
+
+function print_result(){
+  if [ "x$1" == "x0" ]; then
+    e_ok
+  else
+    e_fail
+    shift 
+    [ "x$*" != "x" ] && plog $*
+  fi
+}
+
+function print_result_opposite(){
+  if [ "x$1" == "x0" ]; then
+    e_fail
+    shift 
+    [ "x$*" != "x" ] && plog $*
+  else
+    e_ok
+  fi
+}
+
+function plog() {
+  logger -t rb_check $*
+}
+
+function service_up(){
+  local service="$1"  
+  echo -n "Checking if Service "
+  set_color blue
+  echo -n "$service "
+  set_color norm
+  echo -n "is running"    
+  out=$(service $service status &>/dev/null; echo $?)
+  if [ "x$out" == "x0" ]; then
+    print_result 0
+    ret=0
+  else
+    print_result 1 "service $service is not running"
+    ret=1
+  fi  
+  return $ret
+}
+
+function check_command() {
+  printf "Command: %-80s " "$*"
+  eval $* &>/dev/null
+  print_result $? "ERROR command: $*"
+}
+
+function check_output_command() {
+  printf "Command: %-80s " "$*"
+  out=$(eval $*)
+  if [ "x$out" == "x" ]; then 
+    print_result 1 "ERROR command: $*"
+  else
+    print_result 0
+  fi
+}
+
+function check_install(){
+  e_title "install"  
+  
+  printf "%-90s" "Checking install error"
+  print_result_output_opposite $(grep -i error /root/.install-* 2>/dev/null|grep -v "To check your SSL configuration, or troubleshoot errors, you can use the"|grep -v "INFO: HTTP Request Returned 404 Object Not Found: error")
+  [ $? -ne 0 ] && plog "errors on the instalation"    
+}
+
+function check_registration() {
+  e_title "registration"
+  printf "%-90s" "Checking install error"
+  print_result_output_opposite $(grep -i error /var/log/rb-register/finish.log | grep -v "To check your SSL configuration, or troubleshoot errors, you can use the" )
+}
+
+function check_nprobe(){
+  e_title "nprobe (netflow)"
+  service_up "zookeeper"
+  service_up "nprobe"
+  
+}
+
+function check_netflow_traffic(){
+  e_title "netflow traffic"
+  service_up "nprobe"
+  if [ $? -eq 0 -a -f /etc/nprobe/config.json ]; then
+    local nprobeline=$(wc -l /etc/nprobe/config.json|awk '{print $1}')
+    if [ $nprobeline -gt 4 ]; then      
+      printf "%-90s" "Check if clientproxy is receiving netflow "
+      local out=$(timeout 10 tcpdump -ni eth0 port 2055 -c 1 2>&1 |grep "packets captured"|awk '{print $1}')
+      if [ $out -gt 0 ]; then
+        print_result 0
+      else
+        print_result 1 "clientproxy is not receiving netflow"
+      fi      
+    fi
+  fi
+}
+
+function check_topic(){
+  printf "Check messages into %-69s " "$1"
+  local topic=$1
+  local out=$(timeout 30 /opt/rb/bin/rb_consumer.sh -t $1 -c 1 2>&1|tail -n 1|grep Consumed|awk '{print $2}')
+  if [ "x$out" == "x0" -o "x$out" == "x" ]; then
+    print_result 1 "kafka is not receiving messages at the topic $topic"
+  else
+    print_result 0 
+  fi
+}
+
+function check_zookeeper(){
+  e_title "zookeeper"
+  service_up "zookeeper"
+  check_command "echo 'ls /' | rb_zkcli"
+}
+
+function check_kafka(){
+  e_title "kafka"
+  service_up "zookeeper"
+  service_up "kafka"
+  
+  check_output_command "rb_get_topics.rb -t rb_monitor | grep rb_monitor"
+  check_output_command "rb_get_topics.rb -t rb_flow | grep rb_flow"
+  check_output_command "rb_get_topics.rb -t rb_event | grep rb_event"
+  check_output_command "rb_get_topics.rb -t rb_loc |grep rb_loc"
+  check_output_command "rb_get_topics.rb -t rb_social |grep rb_social"
+}
+
+function check_kafka_topics(){
+  e_title "kafka messages"
+  service_up "kafka"
+
+  check_topic "rb_monitor"
+  check_topic "rb_flow"
+  check_topic "rb_event"
+  check_topic "rb_loc"
+  check_topic "rb_social"
+}
+
+
+function check_rb_monitor() {
+  e_title "rb-monitor"
+  service_up "rb-monitor"
+  
+  echo "Checking functionality of rb-monitor"
+  check_topic "rb_monitor"      
+}
+
+function check_k2http() {
+  e_title "k2http"
+  service_up "k2http"
+
+  printf "%-90s" "Check if k2http has recent errors: "
+  tail -n30 /var/log/k2http/current | grep -qi error
+  print_result_opposite $?
+
+}
+
+function check_n2klocd() {
+  e_title "n2klocd"
+  service_up "n2klocd"
+}
+
+function check_rbsocial() {
+  e_title "rb-social"
+  service_up "rb-social"
+}
+
+function check_hd(){
+  e_title "hard disk"  
+  local max=0
+  local flag=0
+  while read line; do
+    if [ $flag -eq 0 ]; then
+      local linecount=$(echo $line |wc -w)
+      if [ $linecount -eq 5 ]; then
+        m=$(echo $line | awk '{print $4}')
+      else
+        m=$(echo $line | awk '{print $5}')
+      fi
+      m=$(echo $m|sed 's/%//')
+      [ $max -lt $m ] && max=$m
+      if [ $m -ge 90 ]; then
+        flag=1
+      fi
+    fi
+  done <<< "$(df -h|grep '%'|grep -v 'Use%')"
+  printf "%-90s" "disks (${max}%)"
+  print_result $flag "disk problem (${max}%)"
+}
+
+function check_memory(){
+  e_title "memory"  
+    
+  local flag=0
+  local memtot=$(free |grep "^Mem:"|awk '{print $2}')
+  local memfree=$(free |grep "buffers/cache"|awk '{print $4}')
+  local percent=$(( $memtot - $memfree ))
+  percent=$(( 100 * $percent / $memtot ))
+  printf "%-90s" "memory used (${percent}%) "
+  if [ $percent -gt 90 ]; then
+    print_result 1 "memory problem (${percent}%)"
+  else
+    print_result 0
+  fi    
+}
+
+function check_kill(){
+  e_title "killed proccess"
+  printf "%-90s" "Check killed proccesses: "
+  local killed=$(dmesg |grep killed |grep Task|awk '{print $3}'|sed 's|/||'|sort|uniq)
+  if [ "x$killed" == "x" ]; then
+    print_result 0
+  else
+    print_result 1
+    for m in $killed; do 
+      printf "%-90s" "  * $m" 
+      print_result 1 "the service $m has been killed"
+    done
+  fi  
+}
+
+function check_io(){
+  e_title "I/O errors proccess"
+  printf "%-90s" "Check I/O errors proccesses: "
+  local result=$(dmesg |grep end_request |grep I/O |grep error)
+  if [ "x$result" == "x" ]; then
+    print_result 0
+  else
+    print_result 1 "I/O error at"
+  fi    
+}
+ 
+ 
+#rb_manager_ssh.sh all 'dmesg | grep "end_request: I/O error, dev "'
+
+
+#######################################################################################
+# MAIN
+#######################################################################################
+
+
+
+if [ "x$output_file" != "x" ]; then
+  rmfile=1
+  output_file="/tmp/rb_check-$$.tmp"
+  [ $quiet -eq 0 ] && echo "INFO: the output has been redirected to $output_file"
+fi
+
+[ $quiet -eq 1 -a "x$output_file" == "x" ] 
+if [ $colors -eq 0 ]; then
+  CMDBEGIN="BOOTUP=none"
+  BOOTUP="none"
+fi
+
+if [ "x$output_file" != "x" ]; then
+  rm -f $output_file
+  exec 1<&-
+  exec 2<&-
+  exec 1<>$output_file
+  exec 2>&1
+fi
+
+#renice -n 19 $$ &>/dev/null
+e_title "          DATE: $(date)    "
+
+# install errors are not shown as default
+[ "x$s" == "xinstall" ] && check_install
+[ "x$s" == "registration" ] && check_registration
+[ "x$s" == "x" -o "x$s" == "xhd" -o "x$s" == "xharddisk" -o "x$s" == "xdisk" ] && check_hd 
+[ "x$s" == "x" -o "x$s" == "xmem" -o "x$s" == "xmemory" -o "x$s" == "xm" ] && check_memory
+[ "x$s" == "x" -o "x$s" == "xkill" ] && check_kill
+[ "x$s" == "x" -o "x$s" == "xio" ] && check_io
+[ "x$s" == "x" -o "x$s" == "xzookeeper" -o "x$s" == "xz" ] && check_zookeeper
+[ "x$s" == "x" -o "x$s" == "xnprobe" -o "x$s" == "xnetflow" ] && check_nprobe
+[ "x$s" == "x" -o "x$s" == "xnetflow_traffic" -o "x$s" == "xnetflow" ] && check_netflow_traffic
+[ "x$s" == "x" -o "x$s" == "xkafka" -o "x$s" == "xqueue" -o "x$s" == "xk" ] && check_kafka
+[ "x$s" == "x" -o "x$s" == "xkafka_topics" -o "x$s" == "xtopics" ] && check_kafka_topics
+[ "x$s" == "x" -o "x$s" == "xrb-monitor" -o "x$s" == "xrb_monitor" -o "x$s" == "xmonitor" ] && check_rb_monitor
+[ "x$s" == "x" -o "x$s" == "xrb-social" -o "x$s" == "xrb_social" -o "x$s" == "xsocial" ] && check_rbsocial
+[ "x$s" == "x" -o "x$s" == "xk2http" ] && check_k2http
+[ "x$s" == "x" -o "x$s" == "xn2klocd" ] && check_n2klocd
+
+
+if [ $extended -eq 1 ]; then
+  e_title "Extended INFO: rb_get_services.sh all"
+  eval $CMDBEGIN /opt/rb/bin/rb_get_services.sh all
+
+  e_title "Extended INFO: rb_get_topics.rb"
+  eval $CMDBEGIN /opt/rb/bin/rb_get_topics.rb
+fi
+
+exit $EXITRET
